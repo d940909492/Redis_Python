@@ -7,7 +7,15 @@ def handle_client(client_socket, client_address):
     request = client_socket.recv(512) 
     
     if request:
-        response = "+PONG\r\n"
+        data = request.decode().strip().split('\r\n')
+        
+        if len(data) >= 5 and data[0] == '*2' and data[2].lower() == '$4' and data[3].lower() == 'echo':
+            arg_length = int(data[4][1:])
+            arg = data[5]
+            response = f"${arg_length}\r\n{arg}\r\n"
+        else:
+            response = "+PONG\r\n"
+            
         client_socket.send(response.encode())
 
 
