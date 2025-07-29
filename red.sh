@@ -9,4 +9,4 @@
 set -e # Exit early if any commands fail
 
 # Run the Python application directly
-python -m app.main "$@"
+exec python -m pipenv run python -m app.main "$@"
