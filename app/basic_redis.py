@@ -13,11 +13,11 @@ def handle_client(client_socket, client_address):
             if not request_bytes:
                 break
 
-            # RESP parsing
+            # resp parsing
             parts = request_bytes.strip().split(b'\r\n')
             command = parts[2].decode().upper()
 
-            # Command handling
+            # command handling
             if command == "PING":
                 response = b"+PONG\r\n"
                 client_socket.sendall(response)
@@ -36,38 +36,26 @@ def handle_client(client_socket, client_address):
                     expiry_ms = int(parts[10].decode())
                     expiry_timestamp = time.time() + (expiry_ms / 1000.0)
 
-                # Store strings with string type
-                DATA_STORE[key] = ('string', (value, expiry_timestamp))
+                DATA_STORE[key] = (value, expiry_timestamp)
                 client_socket.sendall(b"+OK\r\n")
 
             elif command == "GET":
                 key = parts[4]
                 stored_item = DATA_STORE.get(key)
                 
-                # Check for is key exist and correct type 
-                if stored_item is None or stored_item[0] != 'string':
+                if stored_item is None:
                     client_socket.sendall(b"$-1\r\n")
                     continue
 
-                _type, (value, expiry_timestamp) = stored_item
+                value, expiry_timestamp = stored_item
 
+                # Check if the key has expiry time and if key has passed
                 if expiry_timestamp is not None and time.time() > expiry_timestamp:
                     del DATA_STORE[key]
                     client_socket.sendall(b"$-1\r\n")
                 else:
                     response = f"${len(value)}\r\n".encode() + value + b"\r\n"
                     client_socket.sendall(response)
-            
-            elif command == "RPUSH":
-                key = parts[4]
-                element = parts[6]
-                
-                new_list = [element]
-                DATA_STORE[key] = ('list', new_list)
-                
-                response = f":{len(new_list)}\r\n".encode()
-                client_socket.sendall(response)
-
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
 
