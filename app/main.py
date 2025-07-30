@@ -1,7 +1,9 @@
 import socket
 import threading
+import time
 
 DATA_STORE = {}
+
 
 def handle_client(client_socket, client_address):
     print(f"Connect from {client_address}")
@@ -28,17 +30,32 @@ def handle_client(client_socket, client_address):
             elif command == "SET":
                 key = parts[4]
                 value = parts[6]
-                DATA_STORE[key] = value
+                expiry_timestamp = None
+                
+                if len(parts) > 8 and parts[8].decode().upper() == 'PX':
+                    expiry_ms = int(parts[10].decode())
+                    expiry_timestamp = time.time() + (expiry_ms / 1000.0)
+
+                DATA_STORE[key] = (value, expiry_timestamp)
                 client_socket.sendall(b"+OK\r\n")
 
             elif command == "GET":
                 key = parts[4]
-                value = DATA_STORE.get(key)
-                if value:
+                stored_item = DATA_STORE.get(key)
+                
+                if stored_item is None:
+                    client_socket.sendall(b"$-1\r\n")
+                    continue
+
+                value, expiry_timestamp = stored_item
+
+                # Check if the key has expiry time and if key has passed
+                if expiry_timestamp is not None and time.time() > expiry_timestamp:
+                    del DATA_STORE[key]
+                    client_socket.sendall(b"$-1\r\n")
+                else:
                     response = f"${len(value)}\r\n".encode() + value + b"\r\n"
                     client_socket.sendall(response)
-                else:
-                    client_socket.sendall(b"$-1\r\n")
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
 
