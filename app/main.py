@@ -44,7 +44,7 @@ def handle_client(client_socket, client_address):
                 key = parts[4]
                 stored_item = DATA_STORE.get(key)
                 
-                # Check for is key exist and correct type 
+                # Check for is key exist and correct type
                 if stored_item is None or stored_item[0] != 'string':
                     client_socket.sendall(b"$-1\r\n")
                     continue
@@ -61,11 +61,21 @@ def handle_client(client_socket, client_address):
             elif command == "RPUSH":
                 key = parts[4]
                 element = parts[6]
-                
-                new_list = [element]
-                DATA_STORE[key] = ('list', new_list)
-                
-                response = f":{len(new_list)}\r\n".encode()
+
+                stored_item = DATA_STORE.get(key)
+
+                # Check if a list already exists for the key
+                if stored_item and stored_item[0] == 'list':
+                    current_list = stored_item[1]
+                    current_list.append(element)
+                    list_length = len(current_list)
+                else:
+                    new_list = [element]
+                    DATA_STORE[key] = ('list', new_list)
+                    list_length = len(new_list)
+
+                # Respond with the new length of the list
+                response = f":{list_length}\r\n".encode()
                 client_socket.sendall(response)
 
             else:
