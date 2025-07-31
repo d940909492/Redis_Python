@@ -44,7 +44,6 @@ def handle_client(client_socket, client_address):
                 key = parts[4]
                 stored_item = DATA_STORE.get(key)
                 
-                # Check for is key exist and correct type
                 if stored_item is None or stored_item[0] != 'string':
                     client_socket.sendall(b"$-1\r\n")
                     continue
@@ -61,10 +60,8 @@ def handle_client(client_socket, client_address):
             elif command == "RPUSH":
                 key = parts[4]
                 elements = parts[6::2]
-
                 stored_item = DATA_STORE.get(key)
 
-                # Check if a list already exists for the key
                 if stored_item and stored_item[0] == 'list':
                     current_list = stored_item[1]
                     current_list.extend(elements)
@@ -73,9 +70,33 @@ def handle_client(client_socket, client_address):
                     DATA_STORE[key] = ('list', elements)
                     list_length = len(elements)
 
-                # Respond with the new length of the list
                 response = f":{list_length}\r\n".encode()
                 client_socket.sendall(response)
+            
+            elif command == "LRANGE":
+                key = parts[4]
+                start = int(parts[6].decode())
+                end = int(parts[8].decode())
+                
+                stored_item = DATA_STORE.get(key)
+                
+                # If key doesnt exist or not list, return an empty array
+                if stored_item is None or stored_item[0] != 'list':
+                    client_socket.sendall(b"*0\r\n")
+                    continue
+                
+                the_list = stored_item[1]
+                
+                sub_list = the_list[start : end + 1]
+                
+                # Format the response as RESP Array
+                response_parts = [f"*{len(sub_list)}\r\n".encode()]
+                for item in sub_list:
+                    response_parts.append(f"${len(item)}\r\n".encode())
+                    response_parts.append(item)
+                    response_parts.append(b"\r\n")
+                
+                client_socket.sendall(b"".join(response_parts))
 
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
