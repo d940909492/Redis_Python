@@ -87,7 +87,10 @@ def handle_client(client_socket, client_address):
                 
                 the_list = stored_item[1]
                 
-                sub_list = the_list[start : end + 1]
+                if end == -1:
+                    sub_list = the_list[start:]
+                else:
+                    sub_list = the_list[start : end + 1]
                 
                 # Format the response as RESP Array
                 response_parts = [f"*{len(sub_list)}\r\n".encode()]
