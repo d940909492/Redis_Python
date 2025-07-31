@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 
+
 DATA_STORE = {}
 
 
@@ -36,7 +37,6 @@ def handle_client(client_socket, client_address):
                     expiry_ms = int(parts[10].decode())
                     expiry_timestamp = time.time() + (expiry_ms / 1000.0)
 
-                # Store strings with string type
                 DATA_STORE[key] = ('string', (value, expiry_timestamp))
                 client_socket.sendall(b"+OK\r\n")
 
@@ -60,19 +60,18 @@ def handle_client(client_socket, client_address):
             
             elif command == "RPUSH":
                 key = parts[4]
-                element = parts[6]
+                elements = parts[6::2]
 
                 stored_item = DATA_STORE.get(key)
 
                 # Check if a list already exists for the key
                 if stored_item and stored_item[0] == 'list':
                     current_list = stored_item[1]
-                    current_list.append(element)
+                    current_list.extend(elements)
                     list_length = len(current_list)
                 else:
-                    new_list = [element]
-                    DATA_STORE[key] = ('list', new_list)
-                    list_length = len(new_list)
+                    DATA_STORE[key] = ('list', elements)
+                    list_length = len(elements)
 
                 # Respond with the new length of the list
                 response = f":{list_length}\r\n".encode()
