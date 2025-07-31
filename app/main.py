@@ -72,6 +72,24 @@ def handle_client(client_socket, client_address):
 
                 response = f":{list_length}\r\n".encode()
                 client_socket.sendall(response)
+
+            elif command == "LPUSH":
+                key = parts[4]
+                elements = parts[6::2]
+
+                stored_item = DATA_STORE.get(key)
+                elements.reverse()
+
+                if stored_item and stored_item[0] == 'list':
+                    current_list = stored_item[1]
+                    current_list[:0] = elements
+                    list_length = len(current_list)
+                else:
+                    DATA_STORE[key] = ('list', elements)
+                    list_length = len(elements)
+                
+                response = f":{list_length}\r\n".encode()
+                client_socket.sendall(response)
             
             elif command == "LRANGE":
                 key = parts[4]
@@ -80,7 +98,6 @@ def handle_client(client_socket, client_address):
                 
                 stored_item = DATA_STORE.get(key)
                 
-                # If key doesnt exist or not list, return an empty array
                 if stored_item is None or stored_item[0] != 'list':
                     client_socket.sendall(b"*0\r\n")
                     continue
@@ -92,7 +109,6 @@ def handle_client(client_socket, client_address):
                 else:
                     sub_list = the_list[start : end + 1]
                 
-                # Format the response as RESP Array
                 response_parts = [f"*{len(sub_list)}\r\n".encode()]
                 for item in sub_list:
                     response_parts.append(f"${len(item)}\r\n".encode())
