@@ -122,12 +122,26 @@ def handle_client(client_socket, client_address):
                 stored_item = DATA_STORE.get(key)
                 list_length = 0
 
-                # If the key exists and is list, get its length
                 if stored_item and stored_item[0] == 'list':
                     list_length = len(stored_item[1])
                 
-                # Respond with the length as RESP Integer
                 response = f":{list_length}\r\n".encode()
+                client_socket.sendall(response)
+
+            elif command == "LPOP":
+                key = parts[4]
+                stored_item = DATA_STORE.get(key)
+
+                # Return null if key doesn't exist, isn't list, or empty list
+                if not stored_item or stored_item[0] != 'list' or not stored_item[1]:
+                    client_socket.sendall(b"$-1\r\n")
+                    continue
+                
+                the_list = stored_item[1]
+                popped_element = the_list.pop(0)
+                
+                # Respond with the popped element as RESP bulk string
+                response = f"${len(popped_element)}\r\n".encode() + popped_element + b"\r\n"
                 client_socket.sendall(response)
 
             else:
