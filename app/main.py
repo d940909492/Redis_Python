@@ -117,6 +117,19 @@ def handle_client(client_socket, client_address):
                 
                 client_socket.sendall(b"".join(response_parts))
 
+            elif command == "LLEN":
+                key = parts[4]
+                stored_item = DATA_STORE.get(key)
+                list_length = 0
+
+                # If the key exists and is list, get its length
+                if stored_item and stored_item[0] == 'list':
+                    list_length = len(stored_item[1])
+                
+                # Respond with the length as RESP Integer
+                response = f":{list_length}\r\n".encode()
+                client_socket.sendall(response)
+
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
 
