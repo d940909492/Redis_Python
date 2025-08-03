@@ -1,14 +1,10 @@
 import socket
 import threading
 import time
-import collections
-
-
-GLOBAL_LOCK = threading.Lock()
-
-BLOCKING_CONDITIONS = {}
 
 DATA_STORE = {}
+GLOBAL_LOCK = threading.Lock()
+BLOCKING_CONDITIONS = {}
 
 
 def handle_client(client_socket, client_address):
@@ -79,42 +75,95 @@ def handle_client(client_socket, client_address):
                     response = f":{len(current_list)}\r\n".encode()
 
                     if key in BLOCKING_CONDITIONS:
-                        condition = BLOCKING_CONDITIONS[key]
-                        condition.notify()
+                        BLOCKING_CONDITIONS[key].notify()
 
                 client_socket.sendall(response)
 
+            elif command == "LPOP":
+                key = parts[4]
+                response = b""
+                with GLOBAL_LOCK:
+                    count_provided = len(parts) > 5
+                    if count_provided:
+                        count = int(parts[6].decode())
+                        stored_item = DATA_STORE.get(key)
+                        if not stored_item or stored_item[0] != 'list' or not stored_item[1]:
+                            response = b"*0\r\n"
+                        else:
+                            the_list = stored_item[1]
+                            pop_count = min(count, len(the_list))
+                            elements_to_return = the_list[:pop_count]
+                            DATA_STORE[key] = ('list', the_list[pop_count:])
+                            
+                            response_parts = [f"*{len(elements_to_return)}\r\n".encode()]
+                            for item in elements_to_return:
+                                response_parts.append(f"${len(item)}\r\n".encode())
+                                response_parts.append(item)
+                                response_parts.append(b"\r\n")
+                            response = b"".join(response_parts)
+                    else:
+                        stored_item = DATA_STORE.get(key)
+                        if not stored_item or stored_item[0] != 'list' or not stored_item[1]:
+                            response = b"$-1\r\n"
+                        else:
+                            the_list = stored_item[1]
+                            popped_element = the_list.pop(0)
+                            response = f"${len(popped_element)}\r\n".encode() + popped_element + b"\r\n"
+                client_socket.sendall(response)
+            
             elif command == "BLPOP":
                 key = parts[4]
                 response = b""
-
                 with GLOBAL_LOCK:
                     stored_item = DATA_STORE.get(key)
                     if stored_item and stored_item[0] == 'list' and stored_item[1]:
                         the_list = stored_item[1]
                         popped_element = the_list.pop(0)
-                        
                         response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
                         response = b"".join(response_parts)
                     else:
                         if key not in BLOCKING_CONDITIONS:
                             BLOCKING_CONDITIONS[key] = threading.Condition(GLOBAL_LOCK)
                         condition = BLOCKING_CONDITIONS[key]
-                        
                         condition.wait()
-
+                        
                         the_list = DATA_STORE.get(key)[1]
                         popped_element = the_list.pop(0)
-
                         if not condition._waiters:
                             del BLOCKING_CONDITIONS[key]
 
                         response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
                         response = b"".join(response_parts)
-                
                 client_socket.sendall(response)
-            
 
+            elif command == "LRANGE" or command == "LLEN":
+                 with GLOBAL_LOCK:
+                    key = parts[4]
+                    stored_item = DATA_STORE.get(key)
+
+                    if command == "LLEN":
+                        list_length = 0
+                        if stored_item and stored_item[0] == 'list':
+                            list_length = len(stored_item[1])
+                        client_socket.sendall(f":{list_length}\r\n".encode())
+                    else:
+                        if stored_item is None or stored_item[0] != 'list':
+                            client_socket.sendall(b"*0\r\n")
+                        else:
+                            start = int(parts[6].decode())
+                            end = int(parts[8].decode())
+                            the_list = stored_item[1]
+                            if end == -1:
+                                sub_list = the_list[start:]
+                            else:
+                                sub_list = the_list[start : end + 1]
+                            
+                            response_parts = [f"*{len(sub_list)}\r\n".encode()]
+                            for item in sub_list:
+                                response_parts.append(f"${len(item)}\r\n".encode())
+                                response_parts.append(item)
+                                response_parts.append(b"\r\n")
+                            client_socket.sendall(b"".join(response_parts))
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
 
