@@ -130,19 +130,39 @@ def handle_client(client_socket, client_address):
 
             elif command == "LPOP":
                 key = parts[4]
-                stored_item = DATA_STORE.get(key)
+                count_provided = len(parts) > 5
 
-                # Return null if key doesn't exist, isn't list, or empty list
-                if not stored_item or stored_item[0] != 'list' or not stored_item[1]:
-                    client_socket.sendall(b"$-1\r\n")
-                    continue
-                
-                the_list = stored_item[1]
-                popped_element = the_list.pop(0)
-                
-                # Respond with the popped element as RESP bulk string
-                response = f"${len(popped_element)}\r\n".encode() + popped_element + b"\r\n"
-                client_socket.sendall(response)
+                if count_provided:
+                    count = int(parts[6].decode())
+                    stored_item = DATA_STORE.get(key)
+
+                    if not stored_item or stored_item[0] != 'list' or not stored_item[1]:
+                        client_socket.sendall(b"*0\r\n")
+                        continue
+                    
+                    the_list = stored_item[1]
+                    pop_count = min(count, len(the_list))
+                    
+                    elements_to_return = the_list[:pop_count]
+                    DATA_STORE[key] = ('list', the_list[pop_count:])
+                    
+                    response_parts = [f"*{len(elements_to_return)}\r\n".encode()]
+                    for item in elements_to_return:
+                        response_parts.append(f"${len(item)}\r\n".encode())
+                        response_parts.append(item)
+                        response_parts.append(b"\r\n")
+                    client_socket.sendall(b"".join(response_parts))
+                else:
+                    stored_item = DATA_STORE.get(key)
+                    if not stored_item or stored_item[0] != 'list' or not stored_item[1]:
+                        client_socket.sendall(b"$-1\r\n")
+                        continue
+                    
+                    the_list = stored_item[1]
+                    popped_element = the_list.pop(0)
+                    
+                    response = f"${len(popped_element)}\r\n".encode() + popped_element + b"\r\n"
+                    client_socket.sendall(response)
 
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
