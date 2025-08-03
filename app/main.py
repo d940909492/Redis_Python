@@ -113,7 +113,9 @@ def handle_client(client_socket, client_address):
             
             elif command == "BLPOP":
                 key = parts[4]
+                timeout = float(parts[6].decode())
                 response = b""
+                
                 with GLOBAL_LOCK:
                     stored_item = DATA_STORE.get(key)
                     if stored_item and stored_item[0] == 'list' and stored_item[1]:
@@ -125,22 +127,28 @@ def handle_client(client_socket, client_address):
                         if key not in BLOCKING_CONDITIONS:
                             BLOCKING_CONDITIONS[key] = threading.Condition(GLOBAL_LOCK)
                         condition = BLOCKING_CONDITIONS[key]
-                        condition.wait()
                         
-                        the_list = DATA_STORE.get(key)[1]
-                        popped_element = the_list.pop(0)
+                        wait_timeout = None if timeout == 0 else timeout
+                        was_notified = condition.wait(timeout=wait_timeout)
+                        
+                        if was_notified:
+                            the_list = DATA_STORE.get(key)[1]
+                            popped_element = the_list.pop(0)
+                            response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
+                            response = b"".join(response_parts)
+                        else:
+                            # Wait timed out
+                            response = b"$-1\r\n"
+
                         if not condition._waiters:
                             del BLOCKING_CONDITIONS[key]
 
-                        response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
-                        response = b"".join(response_parts)
                 client_socket.sendall(response)
 
             elif command == "LRANGE" or command == "LLEN":
                  with GLOBAL_LOCK:
                     key = parts[4]
                     stored_item = DATA_STORE.get(key)
-
                     if command == "LLEN":
                         list_length = 0
                         if stored_item and stored_item[0] == 'list':
