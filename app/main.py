@@ -41,45 +41,89 @@ def handle_client(client_socket, client_address):
                 key = parts[4]
                 entry_id_str = parts[6].decode()
                 
-                try:
-                    ms_time, seq_num = map(int, entry_id_str.split('-'))
-                except ValueError:
-                    client_socket.sendall(b"-ERR Invalid stream ID specified\r\n")
-                    continue
-
-                if ms_time == 0 and seq_num == 0:
-                    client_socket.sendall(b"-ERR The ID specified in XADD must be greater than 0-0\r\n")
-                    continue
-
-                with GLOBAL_LOCK:
-                    stored_item = DATA_STORE.get(key)
+                if entry_id_str.endswith('-*'):
+                    ms_time_str = entry_id_str[:-2]
+                    try:
+                        ms_time = int(ms_time_str)
+                    except ValueError:
+                        client_socket.sendall(b"-ERR Invalid stream ID specified\r\n")
+                        continue
                     
-                    if stored_item and stored_item[0] == 'stream':
-                        stream_entries = stored_item[1]
-                        if stream_entries:
+                    seq_num = 0
+                    with GLOBAL_LOCK:
+                        stored_item = DATA_STORE.get(key)
+                        if stored_item and stored_item[0] == 'stream' and stored_item[1]:
+                            stream_entries = stored_item[1]
+                            last_entry_id_str = stream_entries[-1][0].decode()
+                            last_ms_time, last_seq_num = map(int, last_entry_id_str.split('-'))
+
+                            if ms_time < last_ms_time:
+                                client_socket.sendall(b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n")
+                                continue
+                            
+                            if ms_time == last_ms_time:
+                                seq_num = last_seq_num + 1
+                        
+                        if ms_time == 0 and seq_num == 0:
+                            seq_num = 1
+
+                        generated_id_str = f"{ms_time}-{seq_num}"
+                        generated_id_bytes = generated_id_str.encode()
+
+                        entry_data = {}
+                        field_value_parts = parts[8::2]
+                        for i in range(0, len(field_value_parts), 2):
+                            entry_data[field_value_parts[i]] = field_value_parts[i+1]
+                        
+                        new_entry = (generated_id_bytes, entry_data)
+                        
+                        if stored_item and stored_item[0] == 'stream':
+                            stored_item[1].append(new_entry)
+                        else:
+                            DATA_STORE[key] = ('stream', [new_entry])
+
+                    response = f"${len(generated_id_bytes)}\r\n".encode() + generated_id_bytes + b"\r\n"
+                    client_socket.sendall(response)
+                
+                else:
+                    try:
+                        ms_time, seq_num = map(int, entry_id_str.split('-'))
+                    except ValueError:
+                        client_socket.sendall(b"-ERR Invalid stream ID specified\r\n")
+                        continue
+
+                    if ms_time == 0 and seq_num == 0:
+                        client_socket.sendall(b"-ERR The ID specified in XADD must be greater than 0-0\r\n")
+                        continue
+
+                    with GLOBAL_LOCK:
+                        stored_item = DATA_STORE.get(key)
+                        
+                        if stored_item and stored_item[0] == 'stream' and stored_item[1]:
+                            stream_entries = stored_item[1]
                             last_entry_id_str = stream_entries[-1][0].decode()
                             last_ms_time, last_seq_num = map(int, last_entry_id_str.split('-'))
                             
                             if ms_time < last_ms_time or (ms_time == last_ms_time and seq_num <= last_seq_num):
                                 client_socket.sendall(b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n")
                                 continue
-                    
-                    entry_data = {}
-                    field_value_parts = parts[8::2]
-                    for i in range(0, len(field_value_parts), 2):
-                        field = field_value_parts[i]
-                        value = field_value_parts[i+1]
-                        entry_data[field] = value
-                    
-                    new_entry = (parts[6], entry_data)
-                    
-                    if stored_item and stored_item[0] == 'stream':
-                        stream_entries.append(new_entry)
-                    else:
-                        DATA_STORE[key] = ('stream', [new_entry])
+                        
+                        entry_data = {}
+                        field_value_parts = parts[8::2]
+                        for i in range(0, len(field_value_parts), 2):
+                            field = field_value_parts[i]
+                            value = field_value_parts[i+1]
+                            entry_data[field] = value
+                        
+                        new_entry = (parts[6], entry_data)
+                        
+                        if stored_item and stored_item[0] == 'stream':
+                            stream_entries.append(new_entry)
+                        else:
+                            DATA_STORE[key] = ('stream', [new_entry])
 
-                response = f"${len(parts[6])}\r\n".encode() + parts[6] + b"\r\n"
-                client_socket.sendall(response)
+                    response = f"${len(parts[6])}\r\n".encode() + parts[6] + b"\r\n"
+                    client_socket.sendall(response)
 
             elif command == "SET":
                 key = parts[4]
