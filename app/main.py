@@ -2,7 +2,6 @@ import socket
 import threading
 import time
 
-
 DATA_STORE = {}
 GLOBAL_LOCK = threading.Lock()
 BLOCKING_CONDITIONS = {}
@@ -31,37 +30,55 @@ def handle_client(client_socket, client_address):
             elif command == "TYPE":
                 key = parts[4]
                 type_name = "none"
-
                 with GLOBAL_LOCK:
                     stored_item = DATA_STORE.get(key)
                     if stored_item:
                         type_name = stored_item[0]
-                
                 response = f"+{type_name}\r\n".encode()
                 client_socket.sendall(response)
             
             elif command == "XADD":
                 key = parts[4]
-                entry_id = parts[6]
+                entry_id_str = parts[6].decode()
                 
-                entry_data = {}
-                field_value_parts = parts[8::2]
-                for i in range(0, len(field_value_parts), 2):
-                    field = field_value_parts[i]
-                    value = field_value_parts[i+1]
-                    entry_data[field] = value
-                
-                new_entry = (entry_id, entry_data)
-                
+                try:
+                    ms_time, seq_num = map(int, entry_id_str.split('-'))
+                except ValueError:
+                    client_socket.sendall(b"-ERR Invalid stream ID specified\r\n")
+                    continue
+
+                if ms_time == 0 and seq_num == 0:
+                    client_socket.sendall(b"-ERR The ID specified in XADD must be greater than 0-0\r\n")
+                    continue
+
                 with GLOBAL_LOCK:
                     stored_item = DATA_STORE.get(key)
+                    
                     if stored_item and stored_item[0] == 'stream':
                         stream_entries = stored_item[1]
+                        if stream_entries:
+                            last_entry_id_str = stream_entries[-1][0].decode()
+                            last_ms_time, last_seq_num = map(int, last_entry_id_str.split('-'))
+                            
+                            if ms_time < last_ms_time or (ms_time == last_ms_time and seq_num <= last_seq_num):
+                                client_socket.sendall(b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n")
+                                continue
+                    
+                    entry_data = {}
+                    field_value_parts = parts[8::2]
+                    for i in range(0, len(field_value_parts), 2):
+                        field = field_value_parts[i]
+                        value = field_value_parts[i+1]
+                        entry_data[field] = value
+                    
+                    new_entry = (parts[6], entry_data)
+                    
+                    if stored_item and stored_item[0] == 'stream':
                         stream_entries.append(new_entry)
                     else:
                         DATA_STORE[key] = ('stream', [new_entry])
 
-                response = f"${len(entry_id)}\r\n".encode() + entry_id + b"\r\n"
+                response = f"${len(parts[6])}\r\n".encode() + parts[6] + b"\r\n"
                 client_socket.sendall(response)
 
             elif command == "SET":
