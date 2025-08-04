@@ -27,6 +27,18 @@ def handle_client(client_socket, client_address):
                 response = f"${len(message)}\r\n".encode() + message + b"\r\n"
                 client_socket.sendall(response)
 
+            elif command == "TYPE":
+                key = parts[4]
+                type_name = "none"
+
+                with GLOBAL_LOCK:
+                    stored_item = DATA_STORE.get(key)
+                    if stored_item:
+                        type_name = stored_item[0]
+                
+                response = f"+{type_name}\r\n".encode()
+                client_socket.sendall(response)
+
             elif command == "SET":
                 key = parts[4]
                 value = parts[6]
@@ -137,7 +149,6 @@ def handle_client(client_socket, client_address):
                             response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
                             response = b"".join(response_parts)
                         else:
-                            # Wait timed out
                             response = b"$-1\r\n"
 
                         if not condition._waiters:
