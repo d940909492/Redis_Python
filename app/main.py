@@ -158,6 +158,47 @@ def handle_client(client_socket, client_address):
                     response = f"${len(parts[6])}\r\n".encode() + parts[6] + b"\r\n"
                     client_socket.sendall(response)
 
+            elif command == "XRANGE":
+                key = parts[4]
+                start_id_str = parts[6].decode()
+                end_id_str = parts[8].decode()
+
+                def parse_range_id(id_str, is_end_id=False):
+                    if '-' in id_str:
+                        ms, seq = map(int, id_str.split('-'))
+                        return (ms, seq)
+                    else:
+                        ms = int(id_str)
+                        return (ms, float('inf') if is_end_id else 0)
+
+                start_id = parse_range_id(start_id_str)
+                end_id = parse_range_id(end_id_str, is_end_id=True)
+                
+                results = []
+                with GLOBAL_LOCK:
+                    stored_item = DATA_STORE.get(key)
+                    if stored_item and stored_item[0] == 'stream':
+                        stream_entries = stored_item[1]
+                        for entry_id_bytes, entry_data in stream_entries:
+                            entry_id_tuple = parse_range_id(entry_id_bytes.decode())
+                            if start_id <= entry_id_tuple <= end_id:
+                                results.append((entry_id_bytes, entry_data))
+
+                if not results:
+                    client_socket.sendall(b"*0\r\n")
+                else:
+                    response_parts = [f"*{len(results)}\r\n".encode()]
+                    for entry_id_bytes, entry_data in results:
+                        response_parts.append(b'*2\r\n')
+                        response_parts.append(f"${len(entry_id_bytes)}\r\n".encode() + entry_id_bytes + b"\r\n")
+                        
+                        flat_kv = [item for pair in entry_data.items() for item in pair]
+                        response_parts.append(f"*{len(flat_kv)}\r\n".encode())
+                        for item in flat_kv:
+                            response_parts.append(f"${len(item)}\r\n".encode() + item + b"\r\n")
+                    
+                    client_socket.sendall(b"".join(response_parts))
+
             elif command == "SET":
                 key = parts[4]
                 value = parts[6]
