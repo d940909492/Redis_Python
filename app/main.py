@@ -166,6 +166,9 @@ def handle_client(client_socket, client_address):
                 def parse_range_id(id_str, is_end_id=False):
                     if id_str == '-':
                         return (0, 0)
+                    if id_str == '+':
+                        return (float('inf'), float('inf'))
+                    
                     if '-' in id_str:
                         ms, seq = map(int, id_str.split('-'))
                         return (ms, seq)
