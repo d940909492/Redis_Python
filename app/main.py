@@ -164,6 +164,8 @@ def handle_client(client_socket, client_address):
                 end_id_str = parts[8].decode()
 
                 def parse_range_id(id_str, is_end_id=False):
+                    if id_str == '-':
+                        return (0, 0)
                     if '-' in id_str:
                         ms, seq = map(int, id_str.split('-'))
                         return (ms, seq)
