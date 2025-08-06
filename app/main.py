@@ -157,6 +157,52 @@ def handle_client(client_socket, client_address):
 
                     response = f"${len(parts[6])}\r\n".encode() + parts[6] + b"\r\n"
                     client_socket.sendall(response)
+            
+            elif command == "XREAD":
+                try:
+                    streams_keyword_index = parts.index(b'streams')
+                    key_index = streams_keyword_index + 1
+                    id_index = key_index + 1
+                    
+                    key = parts[key_index]
+                    start_id_str = parts[id_index].decode()
+                except (ValueError, IndexError):
+                    client_socket.sendall(b"-ERR syntax error\r\n")
+                    continue
+                
+                def parse_complete_id(id_str):
+                    ms, seq = map(int, id_str.split('-'))
+                    return (ms, seq)
+
+                start_id = parse_complete_id(start_id_str)
+                
+                results = []
+                with GLOBAL_LOCK:
+                    stored_item = DATA_STORE.get(key)
+                    if stored_item and stored_item[0] == 'stream':
+                        stream_entries = stored_item[1]
+                        for entry_id_bytes, entry_data in stream_entries:
+                            entry_id_tuple = parse_complete_id(entry_id_bytes.decode())
+                            if entry_id_tuple > start_id:
+                                results.append((entry_id_bytes, entry_data))
+                
+                if not results:
+                    client_socket.sendall(b"$-1\r\n")
+                else:
+                    response_parts = [b"*1\r\n"]
+                    response_parts.append(b"*2\r\n")
+                    response_parts.append(f"${len(key)}\r\n".encode() + key + b"\r\n")
+                    response_parts.append(f"*{len(results)}\r\n".encode())
+                    for entry_id_bytes, entry_data in results:
+                        response_parts.append(b'*2\r\n')
+                        response_parts.append(f"${len(entry_id_bytes)}\r\n".encode() + entry_id_bytes + b"\r\n")
+                        
+                        flat_kv = [item for pair in entry_data.items() for item in pair]
+                        response_parts.append(f"*{len(flat_kv)}\r\n".encode())
+                        for item in flat_kv:
+                            response_parts.append(f"${len(item)}\r\n".encode() + item + b"\r\n")
+                    
+                    client_socket.sendall(b"".join(response_parts))
 
             elif command == "XRANGE":
                 key = parts[4]
@@ -164,11 +210,8 @@ def handle_client(client_socket, client_address):
                 end_id_str = parts[8].decode()
 
                 def parse_range_id(id_str, is_end_id=False):
-                    if id_str == '-':
-                        return (0, 0)
-                    if id_str == '+':
-                        return (float('inf'), float('inf'))
-                    
+                    if id_str == '-': return (0, 0)
+                    if id_str == '+': return (float('inf'), float('inf'))
                     if '-' in id_str:
                         ms, seq = map(int, id_str.split('-'))
                         return (ms, seq)
@@ -185,7 +228,7 @@ def handle_client(client_socket, client_address):
                     if stored_item and stored_item[0] == 'stream':
                         stream_entries = stored_item[1]
                         for entry_id_bytes, entry_data in stream_entries:
-                            entry_id_tuple = parse_range_id(entry_id_bytes.decode())
+                            entry_id_tuple = parse_range_id(entry_id_bytes.decode(), is_end_id=True)
                             if start_id <= entry_id_tuple <= end_id:
                                 results.append((entry_id_bytes, entry_data))
 
