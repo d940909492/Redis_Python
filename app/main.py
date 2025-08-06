@@ -160,12 +160,8 @@ def handle_client(client_socket, client_address):
             
             elif command == "XREAD":
                 try:
-                    streams_keyword_index = parts.index(b'streams')
-                    key_index = streams_keyword_index + 1
-                    id_index = key_index + 1
-                    
-                    key = parts[key_index]
-                    start_id_str = parts[id_index].decode()
+                    key = parts[6]
+                    start_id_str = parts[8].decode()
                 except (ValueError, IndexError):
                     client_socket.sendall(b"-ERR syntax error\r\n")
                     continue
@@ -228,7 +224,7 @@ def handle_client(client_socket, client_address):
                     if stored_item and stored_item[0] == 'stream':
                         stream_entries = stored_item[1]
                         for entry_id_bytes, entry_data in stream_entries:
-                            entry_id_tuple = parse_range_id(entry_id_bytes.decode(), is_end_id=True)
+                            entry_id_tuple = parse_range_id(entry_id_bytes.decode())
                             if start_id <= entry_id_tuple <= end_id:
                                 results.append((entry_id_bytes, entry_data))
 
