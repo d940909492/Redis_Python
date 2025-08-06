@@ -226,7 +226,7 @@ def handle_client(client_socket, client_address):
                     else:
                         DATA_STORE[key] = ('stream', [new_entry])
                     if key in BLOCKING_CONDITIONS:
-                        BLOCKING_CONDITIONS[key].notify()
+                        BLOCKING_CONDITIONS[key].notify_all()
                 client_socket.sendall(response)
 
             elif command == "XRANGE":
@@ -349,8 +349,17 @@ def handle_client(client_socket, client_address):
                         if was_notified:
                             for i in range(num_keys):
                                 key = keys[i]
-                                rechecked_start_id = parse_id(start_ids_str[i])
-                                key_results = find_entries(key, rechecked_start_id)
+                                start_id_val = start_ids_str[i]
+                                if start_id_val == '$':
+                                    stored = DATA_STORE.get(key)
+                                    if stored and stored[0] == 'stream' and stored[1]:
+                                        start_id = parse_id(stored[1][-1][0].decode())
+                                    else:
+                                        start_id = (0,0)
+                                else:
+                                    start_id = parse_id(start_id_val)
+                                
+                                key_results = find_entries(key, start_id)
                                 if key_results:
                                     all_results[key] = key_results
                         if not condition._waiters:
