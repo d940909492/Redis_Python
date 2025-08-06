@@ -61,6 +61,26 @@ def handle_client(client_socket, client_address):
                             response = f"${len(value)}\r\n".encode() + value + b"\r\n"
                 client_socket.sendall(response)
 
+            elif command == "INCR":
+                key = parts[4]
+                response = b""
+                with GLOBAL_LOCK:
+                    stored_item = DATA_STORE.get(key)
+                    if stored_item and stored_item[0] == 'string':
+                        value_bytes, expiry = stored_item[1]
+                        
+                        current_value = int(value_bytes.decode())
+                        new_value = current_value + 1
+                        
+                        new_value_bytes = str(new_value).encode()
+                        DATA_STORE[key] = ('string', (new_value_bytes, expiry))
+                        
+                        response = f":{new_value}\r\n".encode()
+                    else:
+                        response = b"-ERR key not found or holds a value of the wrong type\r\n"
+
+                client_socket.sendall(response)
+
             elif command == "RPUSH" or command == "LPUSH":
                 key = parts[4]
                 elements = parts[6::2]
@@ -226,7 +246,7 @@ def handle_client(client_socket, client_address):
                     else:
                         DATA_STORE[key] = ('stream', [new_entry])
                     if key in BLOCKING_CONDITIONS:
-                        BLOCKING_CONDITIONS[key].notify()
+                        BLOCKING_CONDITIONS[key].notify_all()
                 client_socket.sendall(response)
 
             elif command == "XRANGE":
