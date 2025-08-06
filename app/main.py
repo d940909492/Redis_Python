@@ -66,19 +66,25 @@ def handle_client(client_socket, client_address):
                 response = b""
                 with GLOBAL_LOCK:
                     stored_item = DATA_STORE.get(key)
-                    if stored_item and stored_item[0] == 'string':
-                        value_bytes, expiry = stored_item[1]
-                        
-                        current_value = int(value_bytes.decode())
-                        new_value = current_value + 1
-                        
-                        new_value_bytes = str(new_value).encode()
-                        DATA_STORE[key] = ('string', (new_value_bytes, expiry))
-                        
+                    
+                    if stored_item is None:
+                        new_value = 1
+                        DATA_STORE[key] = ('string', (b'1', None))
                         response = f":{new_value}\r\n".encode()
+                    
+                    elif stored_item[0] == 'string':
+                        value_bytes, expiry = stored_item[1]
+                        try:
+                            current_value = int(value_bytes.decode())
+                            new_value = current_value + 1
+                            new_value_bytes = str(new_value).encode()
+                            DATA_STORE[key] = ('string', (new_value_bytes, expiry))
+                            response = f":{new_value}\r\n".encode()
+                        except ValueError:
+                            response = b"-ERR value is not an integer or out of range\r\n"
                     else:
-                        response = b"-ERR key not found or holds a value of the wrong type\r\n"
-
+                        response = b"-ERR WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+                
                 client_socket.sendall(response)
 
             elif command == "RPUSH" or command == "LPUSH":
