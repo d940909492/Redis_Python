@@ -252,7 +252,7 @@ def handle_client(client_socket, client_address):
                     else:
                         DATA_STORE[key] = ('stream', [new_entry])
                     if key in BLOCKING_CONDITIONS:
-                        BLOCKING_CONDITIONS[key].notify_all()
+                        BLOCKING_CONDITIONS[key].notify()
                 client_socket.sendall(response)
 
             elif command == "XRANGE":
