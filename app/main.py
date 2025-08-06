@@ -226,7 +226,7 @@ def handle_client(client_socket, client_address):
                     else:
                         DATA_STORE[key] = ('stream', [new_entry])
                     if key in BLOCKING_CONDITIONS:
-                        BLOCKING_CONDITIONS[key].notify_all()
+                        BLOCKING_CONDITIONS[key].notify()
                 client_socket.sendall(response)
 
             elif command == "XRANGE":
@@ -305,7 +305,9 @@ def handle_client(client_socket, client_address):
                             if entry_id_tuple > start_id:
                                 results.append((entry_id_bytes, entry_data))
                     return results
+                
                 all_results = {}
+                resolved_start_ids = {}
                 with GLOBAL_LOCK:
                     for i in range(num_keys):
                         key = keys[i]
@@ -318,9 +320,11 @@ def handle_client(client_socket, client_address):
                                 start_id = (0, 0)
                         else:
                             start_id = parse_id(start_id_val)
+                        resolved_start_ids[key] = start_id
                         key_results = find_entries(key, start_id)
                         if key_results:
                             all_results[key] = key_results
+
                 if all_results or not is_blocking:
                     if not all_results:
                         client_socket.sendall(b"$-1\r\n")
@@ -349,16 +353,7 @@ def handle_client(client_socket, client_address):
                         if was_notified:
                             for i in range(num_keys):
                                 key = keys[i]
-                                start_id_val = start_ids_str[i]
-                                if start_id_val == '$':
-                                    stored = DATA_STORE.get(key)
-                                    if stored and stored[0] == 'stream' and stored[1]:
-                                        start_id = parse_id(stored[1][-1][0].decode())
-                                    else:
-                                        start_id = (0,0)
-                                else:
-                                    start_id = parse_id(start_id_val)
-                                
+                                start_id = resolved_start_ids[key]
                                 key_results = find_entries(key, start_id)
                                 if key_results:
                                     all_results[key] = key_results
