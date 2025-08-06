@@ -84,10 +84,9 @@ def handle_client(client_socket, client_address):
                         entry_id_bytes_to_store = parts[6]
                     
                     response = f"${len(entry_id_bytes_to_store)}\r\n".encode() + entry_id_bytes_to_store + b"\r\n"
-
-                    # --- FIX: Correctly parse field-value pairs ---
+                    
                     entry_data = {}
-                    field_value_parts = parts[8::2] # The actual data is at every other index starting from 8
+                    field_value_parts = parts[8::2]
                     for i in range(0, len(field_value_parts), 2):
                         field = field_value_parts[i]
                         value = field_value_parts[i+1]
@@ -106,12 +105,54 @@ def handle_client(client_socket, client_address):
                 
                 client_socket.sendall(response)
 
+            elif command == "XRANGE":
+                key = parts[4]
+                start_id_str = parts[6].decode()
+                end_id_str = parts[8].decode()
+
+                def parse_range_id(id_str, is_end_id=False):
+                    if id_str == '-': return (0, 0)
+                    if id_str == '+': return (float('inf'), float('inf'))
+                    if '-' in id_str:
+                        ms, seq = map(int, id_str.split('-'))
+                        return (ms, seq)
+                    else:
+                        ms = int(id_str)
+                        return (ms, float('inf') if is_end_id else 0)
+
+                start_id = parse_range_id(start_id_str)
+                end_id = parse_range_id(end_id_str, is_end_id=True)
+                
+                results = []
+                with GLOBAL_LOCK:
+                    stored_item = DATA_STORE.get(key)
+                    if stored_item and stored_item[0] == 'stream':
+                        stream_entries = stored_item[1]
+                        for entry_id_bytes, entry_data in stream_entries:
+                            entry_id_tuple = parse_range_id(entry_id_bytes.decode())
+                            if start_id <= entry_id_tuple <= end_id:
+                                results.append((entry_id_bytes, entry_data))
+
+                if not results:
+                    client_socket.sendall(b"*0\r\n")
+                else:
+                    response_parts = [f"*{len(results)}\r\n".encode()]
+                    for entry_id_bytes, entry_data in results:
+                        response_parts.append(b'*2\r\n')
+                        response_parts.append(f"${len(entry_id_bytes)}\r\n".encode() + entry_id_bytes + b"\r\n")
+                        
+                        flat_kv = [item for pair in entry_data.items() for item in pair]
+                        response_parts.append(f"*{len(flat_kv)}\r\n".encode())
+                        for item in flat_kv:
+                            response_parts.append(f"${len(item)}\r\n".encode() + item + b"\r\n")
+                    
+                    client_socket.sendall(b"".join(response_parts))
+
             elif command == "XREAD":
                 is_blocking = False
                 timeout_ms = 0
                 
                 try:
-                    # Find optional 'block' keyword
                     block_keyword_idx = -1
                     for i, p in enumerate(parts):
                         if p.lower() == b'block':
@@ -122,16 +163,14 @@ def handle_client(client_socket, client_address):
                         is_blocking = True
                         timeout_ms = int(parts[block_keyword_idx + 2].decode())
                     
-                    # Find mandatory 'streams' keyword
                     streams_keyword_idx = -1
                     for i, p in enumerate(parts):
                         if p.lower() == b'streams':
                             streams_keyword_idx = i
                             break
 
-                    # Calculate number of streams and their positions
-                    num_keys_and_ids = len(parts) - streams_keyword_idx - 1
-                    num_keys = num_keys_and_ids // 4
+                    num_args_after_streams = len(parts) - streams_keyword_idx - 1
+                    num_keys = num_args_after_streams // 4
 
                     keys_start_idx = streams_keyword_idx + 2
                     ids_start_idx = keys_start_idx + (num_keys * 2)
@@ -157,7 +196,6 @@ def handle_client(client_socket, client_address):
                                 results.append((entry_id_bytes, entry_data))
                     return results
 
-                # --- Initial non-blocking read ---
                 all_results = {}
                 with GLOBAL_LOCK:
                     for i in range(num_keys):
@@ -177,7 +215,6 @@ def handle_client(client_socket, client_address):
                         if key_results:
                             all_results[key] = key_results
                 
-                # --- Decide whether to block or respond immediately ---
                 if all_results or not is_blocking:
                     if not all_results:
                         client_socket.sendall(b"$-1\r\n")
@@ -195,7 +232,7 @@ def handle_client(client_socket, client_address):
                                 for item in flat_kv:
                                     response_parts.append(f"${len(item)}\r\n".encode() + item + b"\r\n")
                         client_socket.sendall(b"".join(response_parts))
-                else: # --- Blocking Path ---
+                else: 
                     with GLOBAL_LOCK:
                         block_key = keys[0]
                         if block_key not in BLOCKING_CONDITIONS:
@@ -233,7 +270,7 @@ def handle_client(client_socket, client_address):
                                     response_parts.append(f"${len(item)}\r\n".encode() + item + b"\r\n")
                         client_socket.sendall(b"".join(response_parts))
 
-            # ... all other commands (XRANGE, SET, GET, list commands) ...
+            # ... all other commands (SET, GET, list commands) ...
             else:
                 client_socket.sendall(b"-ERR unknown command\r\n")
 
