@@ -43,8 +43,7 @@ def handle_client(client_socket, client_address):
                 response = b""
 
                 with GLOBAL_LOCK:
-                    # This block determines the final entry_id_bytes_to_store
-                    # and builds the success response for the client.
+                    entry_id_bytes_to_store = b''
                     if entry_id_str == '*':
                         ms_time = int(time.time() * 1000)
                         seq_num = 0
@@ -56,7 +55,6 @@ def handle_client(client_socket, client_address):
                                 seq_num = last_seq + 1
                         generated_id_str = f"{ms_time}-{seq_num}"
                         entry_id_bytes_to_store = generated_id_str.encode()
-                        response = f"${len(entry_id_bytes_to_store)}\r\n".encode() + entry_id_bytes_to_store + b"\r\n"
                     elif entry_id_str.endswith('-*'):
                         ms_time = int(entry_id_str.split('-')[0])
                         seq_num = 0
@@ -72,7 +70,6 @@ def handle_client(client_socket, client_address):
                             seq_num = 1
                         generated_id_str = f"{ms_time}-{seq_num}"
                         entry_id_bytes_to_store = generated_id_str.encode()
-                        response = f"${len(entry_id_bytes_to_store)}\r\n".encode() + entry_id_bytes_to_store + b"\r\n"
                     else:
                         ms_time, seq_num = map(int, entry_id_str.split('-'))
                         if ms_time == 0 and seq_num == 0:
@@ -85,18 +82,17 @@ def handle_client(client_socket, client_address):
                                 client_socket.sendall(b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n")
                                 continue
                         entry_id_bytes_to_store = parts[6]
-                        response = f"${len(entry_id_bytes_to_store)}\r\n".encode() + entry_id_bytes_to_store + b"\r\n"
+                    
+                    response = f"${len(entry_id_bytes_to_store)}\r\n".encode() + entry_id_bytes_to_store + b"\r\n"
 
                     # --- FIX: Correctly parse field-value pairs ---
                     entry_data = {}
-                    # The actual data is at every 4th position after the ID's value
-                    i = 9
-                    while i < len(parts):
-                        field = parts[i-1]
-                        value = parts[i]
+                    field_value_parts = parts[8::2] # The actual data is at every other index starting from 8
+                    for i in range(0, len(field_value_parts), 2):
+                        field = field_value_parts[i]
+                        value = field_value_parts[i+1]
                         entry_data[field] = value
-                        i += 2
-
+                    
                     new_entry = (entry_id_bytes_to_store, entry_data)
                     
                     stored_item = DATA_STORE.get(key)
@@ -134,7 +130,9 @@ def handle_client(client_socket, client_address):
                             break
 
                     # Calculate number of streams and their positions
-                    num_keys = (len(parts) - streams_keyword_idx - 1) // 4
+                    num_keys_and_ids = len(parts) - streams_keyword_idx - 1
+                    num_keys = num_keys_and_ids // 4
+
                     keys_start_idx = streams_keyword_idx + 2
                     ids_start_idx = keys_start_idx + (num_keys * 2)
                     keys = parts[keys_start_idx:ids_start_idx:2]
@@ -184,7 +182,6 @@ def handle_client(client_socket, client_address):
                     if not all_results:
                         client_socket.sendall(b"$-1\r\n")
                     else:
-                        # Format and send response
                         response_parts = [f"*{len(all_results)}\r\n".encode()]
                         for key, results in all_results.items():
                             response_parts.append(b"*2\r\n")
@@ -200,8 +197,6 @@ def handle_client(client_socket, client_address):
                         client_socket.sendall(b"".join(response_parts))
                 else: # --- Blocking Path ---
                     with GLOBAL_LOCK:
-                        # For simplicity, block on the first key. A full implementation
-                        # would require a more complex multi-key condition system.
                         block_key = keys[0]
                         if block_key not in BLOCKING_CONDITIONS:
                             BLOCKING_CONDITIONS[block_key] = threading.Condition(GLOBAL_LOCK)
@@ -211,7 +206,6 @@ def handle_client(client_socket, client_address):
                         was_notified = condition.wait(timeout=timeout_sec)
                         
                         if was_notified:
-                            # Re-check for entries now that we've been woken up
                             for i in range(num_keys):
                                 key = keys[i]
                                 start_id = parse_id(start_ids_str[i])
@@ -222,7 +216,6 @@ def handle_client(client_socket, client_address):
                         if not condition._waiters:
                             del BLOCKING_CONDITIONS[block_key]
                     
-                    # --- Send response after blocking ---
                     if not all_results:
                         client_socket.sendall(b"$-1\r\n")
                     else:
