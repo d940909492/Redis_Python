@@ -79,7 +79,7 @@ def handle_client(client_socket, client_address):
                         current_list[:0] = elements
                     response = f":{len(current_list)}\r\n".encode()
                     if key in BLOCKING_CONDITIONS:
-                        BLOCKING_CONDITIONS[key].notify_all()
+                        BLOCKING_CONDITIONS[key].notify()
                 client_socket.sendall(response)
 
             elif command == "LPOP":
@@ -129,10 +129,14 @@ def handle_client(client_socket, client_address):
                         wait_timeout = None if timeout == 0 else timeout
                         was_notified = condition.wait(timeout=wait_timeout)
                         if was_notified:
-                            the_list = DATA_STORE.get(key)[1]
-                            popped_element = the_list.pop(0)
-                            response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
-                            response = b"".join(response_parts)
+                            rechecked_item = DATA_STORE.get(key)
+                            if rechecked_item and rechecked_item[1]:
+                                the_list = rechecked_item[1]
+                                popped_element = the_list.pop(0)
+                                response_parts = [b"*2\r\n", f"${len(key)}\r\n".encode(), key, b"\r\n", f"${len(popped_element)}\r\n".encode(), popped_element, b"\r\n"]
+                                response = b"".join(response_parts)
+                            else:
+                                response = b"$-1\r\n" 
                         else:
                             response = b"$-1\r\n"
                         if not condition._waiters:
@@ -222,7 +226,7 @@ def handle_client(client_socket, client_address):
                     else:
                         DATA_STORE[key] = ('stream', [new_entry])
                     if key in BLOCKING_CONDITIONS:
-                        BLOCKING_CONDITIONS[key].notify_all()
+                        BLOCKING_CONDITIONS[key].notify()
                 client_socket.sendall(response)
 
             elif command == "XRANGE":
@@ -345,8 +349,8 @@ def handle_client(client_socket, client_address):
                         if was_notified:
                             for i in range(num_keys):
                                 key = keys[i]
-                                start_id = parse_id(start_ids_str[i])
-                                key_results = find_entries(key, start_id)
+                                rechecked_start_id = parse_id(start_ids_str[i])
+                                key_results = find_entries(key, rechecked_start_id)
                                 if key_results:
                                     all_results[key] = key_results
                         if not condition._waiters:
