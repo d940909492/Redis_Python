@@ -27,6 +27,9 @@ def handle_client(client_socket, client_address):
                 response = f"${len(message)}\r\n".encode() + message + b"\r\n"
                 client_socket.sendall(response)
 
+            elif command == "MULTI":
+                client_socket.sendall(b"+OK\r\n")
+
             elif command == "TYPE":
                 key = parts[4]
                 type_name = "none"
