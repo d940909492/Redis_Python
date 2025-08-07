@@ -9,6 +9,8 @@ BLOCKING_CONDITIONS = {}
 
 def handle_client(client_socket, client_address):
     print(f"Connect from {client_address}")
+    in_transaction = False
+
     while True:
         try:
             request_bytes = client_socket.recv(1024)
@@ -28,7 +30,15 @@ def handle_client(client_socket, client_address):
                 client_socket.sendall(response)
 
             elif command == "MULTI":
+                in_transaction = True
                 client_socket.sendall(b"+OK\r\n")
+            
+            elif command == "EXEC":
+                if not in_transaction:
+                    client_socket.sendall(b"-ERR EXEC without MULTI\r\n")
+                else:
+                    in_transaction = False
+                    client_socket.sendall(b"*0\r\n")
 
             elif command == "TYPE":
                 key = parts[4]
