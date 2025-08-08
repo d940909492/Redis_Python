@@ -2,7 +2,7 @@ def format_simple_string(s):
     return f"+{s}\r\n".encode()
 
 def format_error(s):
-    return f"-{s}\r\n".encode()
+    return f"-ERR {s}\r\n".encode()
 
 def format_integer(i):
     return f":{i}\r\n".encode()

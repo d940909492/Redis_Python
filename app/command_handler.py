@@ -1,6 +1,38 @@
 import time
 from . import protocol
 
+def handle_incr(parts, datastore):
+    key = parts[4]
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if item is None:
+            new_value = 1
+            datastore.set_item(key, ('string', (b'1', None)))
+            return protocol.format_integer(new_value)
+        
+        if item[0] != 'string':
+            return protocol.format_error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        
+        try:
+            current_value = int(item[1][0].decode())
+            new_value = current_value + 1
+            datastore.set_item(key, ('string', (str(new_value).encode(), item[1][1])))
+            return protocol.format_integer(new_value)
+        except ValueError:
+            return protocol.format_error("value is not an integer or out of range")
+
+
+COMMAND_HANDLERS = {
+    "PING": handle_ping,
+    "ECHO": handle_echo,
+    "SET": handle_set,
+    "GET": handle_get,
+    "TYPE": handle_type,
+    "INCR": handle_incr,
+    "XADD": handle_xadd,
+    "XRANGE": handle_xrange,
+    "XREAD": handle_xread,
+}
 
 def handle_ping(parts, datastore):
     return protocol.format_simple_string("PONG")
@@ -30,27 +62,6 @@ def handle_get(parts, datastore):
     
     value, _ = item[1]
     return protocol.format_bulk_string(value)
-
-def handle_incr(parts, datastore):
-    key = parts[4]
-    with datastore.lock:
-        item = datastore.get_item(key)
-        if item is None:
-            new_value = 1
-            datastore.set_item(key, ('string', (b'1', None)))
-            return protocol.format_integer(new_value)
-        
-        if item[0] != 'string':
-            return protocol.format_error("WRONGTYPE Operation against a key holding the wrong kind of value")
-        
-        try:
-            current_value = int(item[1][0].decode())
-            new_value = current_value + 1
-            datastore.set_item(key, ('string', (str(new_value).encode(), item[1][1])))
-            return protocol.format_integer(new_value)
-        except ValueError:
-            return protocol.format_error("ERR value is not an integer or out of range")
-
 
 def handle_type(parts, datastore):
     key = parts[4]
@@ -196,19 +207,6 @@ def handle_xread(parts, datastore):
                     all_results[key] = key_results
     
     return protocol.format_xread_response(all_results)
-
-
-COMMAND_HANDLERS = {
-    "PING": handle_ping,
-    "ECHO": handle_echo,
-    "SET": handle_set,
-    "GET": handle_get,
-    "TYPE": handle_type,
-    "INCR": handle_incr,
-    "XADD": handle_xadd,
-    "XRANGE": handle_xrange,
-    "XREAD": handle_xread,
-}
 
 def handle_command(parts, datastore):
     command_name = parts[2].decode().upper()
