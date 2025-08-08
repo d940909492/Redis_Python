@@ -61,11 +61,10 @@ def handle_lpush(parts, datastore):
     elements = parts[6::2]
     with datastore.lock:
         item = datastore.get_item(key)
-        if item and item[0] != 'list': return protocol.format_error("WRONGTYPE Operation against a key holding the wrong kind of value")
-        current_list = item[1] if item else []
+        current_list = item[1] if item and item[0] == 'list' else []
         elements.reverse()
         current_list[:0] = elements
-        if not item: datastore.set_item(key, ('list', current_list))
+        if not item or item[0] != 'list': datastore.set_item(key, ('list', current_list))
         datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
 
@@ -74,10 +73,9 @@ def handle_rpush(parts, datastore):
     elements = parts[6::2]
     with datastore.lock:
         item = datastore.get_item(key)
-        if item and item[0] != 'list': return protocol.format_error("WRONGTYPE Operation against a key holding the wrong kind of value")
-        current_list = item[1] if item else []
+        current_list = item[1] if item and item[0] == 'list' else []
         current_list.extend(elements)
-        if not item: datastore.set_item(key, ('list', current_list))
+        if not item or item[0] != 'list': datastore.set_item(key, ('list', current_list))
         datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
 
@@ -109,11 +107,9 @@ def handle_lrange(parts, datastore):
         
         the_list = item[1]
         sub_list = the_list[start:] if end == -1 else the_list[start:end+1]
-
-        response_parts = [f"*{len(sub_list)}\r\n".encode()]
-        for list_item in sub_list:
-            response_parts.append(protocol.format_bulk_string(list_item))
-        return b"".join(response_parts)
+        
+        response_parts = [protocol.format_bulk_string(list_item) for list_item in sub_list]
+        return protocol.format_array(response_parts)
 
 def handle_xadd(parts, datastore):
     key = parts[4]
@@ -149,7 +145,7 @@ def handle_xadd(parts, datastore):
                 if ms_time < last_ms or (ms_time == last_ms and seq_num <= last_seq):
                     return protocol.format_error("The ID specified in XADD is equal or smaller than the target stream top item")
             entry_id_bytes_to_store = parts[6]
-
+        
         field_value_parts = parts[8::2]
         entry_data = {field_value_parts[i]: field_value_parts[i+1] for i in range(0, len(field_value_parts), 2)}
         new_entry = (entry_id_bytes_to_store, entry_data)
@@ -221,8 +217,8 @@ COMMAND_HANDLERS = {
     "PING": handle_ping, "ECHO": handle_echo,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
     "TYPE": handle_type,
-    "LPUSH": handle_lpush, "RPUSH": handle_rpush,
-    "LPOP": handle_lpop, "LLEN": handle_llen, "LRANGE": handle_lrange,
+    "LPUSH": handle_lpush, "RPUSH": handle_rpush, "LPOP": handle_lpop,
+    "LLEN": handle_llen, "LRANGE": handle_lrange,
     "XADD": handle_xadd, "XRANGE": handle_xrange, "XREAD": handle_xread,
 }
 
