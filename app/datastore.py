@@ -8,21 +8,19 @@ class RedisDataStore:
         self.lock = threading.Lock()
 
     def get_item(self, key):
-        with self.lock:
-            item = self.data.get(key)
-            if not item:
+        item = self.data.get(key)
+        if not item:
+            return None
+        if item[0] == 'string':
+            _value, expiry_ms = item[1]
+            if expiry_ms is not None and int(time.time() * 1000) > expiry_ms:
+                del self.data[key]
                 return None
-            if item[0] == 'string':
-                _value, expiry_ms = item[1]
-                if expiry_ms is not None and int(time.time() * 1000) > expiry_ms:
-                    del self.data[key]
-                    return None
-            return item
+        return item
 
     def set_item(self, key, value):
-        with self.lock:
-            self.data[key] = value
-    
+        self.data[key] = value
+   
     def get_condition_for_key(self, key):
         with self.lock:
             if key not in self.blocking_conditions:

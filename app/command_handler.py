@@ -1,7 +1,6 @@
 import time
 from . import protocol
 
-
 def handle_ping(parts, datastore):
     return protocol.format_simple_string("PONG")
 
@@ -15,14 +14,19 @@ def handle_set(parts, datastore):
         expiry_duration_ms = int(parts[10].decode())
         expiry_ms = int(time.time() * 1000) + expiry_duration_ms
     
-    datastore.set_item(key, ('string', (value, expiry_ms)))
+    with datastore.lock:
+        datastore.set_item(key, ('string', (value, expiry_ms)))
+    
     return protocol.format_simple_string("OK")
 
 def handle_get(parts, datastore):
     key = parts[4]
-    item = datastore.get_item(key)
+    with datastore.lock:
+        item = datastore.get_item(key)
+    
     if not item or item[0] != 'string':
         return protocol.format_bulk_string(None)
+    
     value, _ = item[1]
     return protocol.format_bulk_string(value)
 
@@ -46,15 +50,15 @@ def handle_incr(parts, datastore):
         except ValueError:
             return protocol.format_error("value is not an integer or out of range")
 
-
 def handle_type(parts, datastore):
     key = parts[4]
-    item = datastore.get_item(key)
+    with datastore.lock:
+        item = datastore.get_item(key)
+    
     type_name = "none"
     if item:
         type_name = item[0]
     return protocol.format_simple_string(type_name)
-
 
 COMMAND_HANDLERS = {
     "PING": handle_ping,
