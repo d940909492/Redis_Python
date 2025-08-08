@@ -10,6 +10,7 @@ BLOCKING_CONDITIONS = {}
 def handle_client(client_socket, client_address):
     print(f"Connect from {client_address}")
     in_transaction = False
+    transaction_queue = []
 
     while True:
         try:
@@ -19,6 +20,11 @@ def handle_client(client_socket, client_address):
 
             parts = request_bytes.strip().split(b'\r\n')
             command = parts[2].decode().upper()
+
+            if in_transaction and command not in ["EXEC", "DISCARD", "MULTI"]:
+                transaction_queue.append(parts)
+                client_socket.sendall(b"+QUEUED\r\n")
+                continue
 
             if command == "PING":
                 response = b"+PONG\r\n"
@@ -31,14 +37,18 @@ def handle_client(client_socket, client_address):
 
             elif command == "MULTI":
                 in_transaction = True
+                transaction_queue = []
                 client_socket.sendall(b"+OK\r\n")
             
             elif command == "EXEC":
                 if not in_transaction:
                     client_socket.sendall(b"-ERR EXEC without MULTI\r\n")
                 else:
+                    response = f"*{len(transaction_queue)}\r\n".encode()
+                    client_socket.sendall(response)
+                    
                     in_transaction = False
-                    client_socket.sendall(b"*0\r\n")
+                    transaction_queue = []
 
             elif command == "TYPE":
                 key = parts[4]
