@@ -18,7 +18,7 @@ def handle_client(client_socket, client_address, datastore):
             parts = request_bytes.strip().split(b'\r\n')
             command_name = parts[2].decode().upper()
 
-            if in_transaction and command_name not in ["EXEC", "DISCARD"]:
+            if in_transaction and command_name not in ["EXEC", "DISCARD", "MULTI"]:
                 transaction_queue.append(parts)
                 client_socket.sendall(b"+QUEUED\r\n")
                 continue
@@ -35,11 +35,20 @@ def handle_client(client_socket, client_address, datastore):
                     for queued_parts in transaction_queue:
                         response = handle_command(queued_parts, datastore)
                         responses.append(response)
+
                     final_response_parts = [f"*{len(responses)}\r\n".encode()]
                     final_response_parts.extend(responses)
                     client_socket.sendall(b"".join(final_response_parts))
+                    
                     in_transaction = False
                     transaction_queue = []
+            elif command_name == "DISCARD":
+                if not in_transaction:
+                     client_socket.sendall(b"-ERR DISCARD without MULTI\r\n")
+                else:
+                    in_transaction = False
+                    transaction_queue = []
+                    client_socket.sendall(b"+OK\r\n")
             else:
                 response = handle_command(parts, datastore)
                 client_socket.sendall(response)
@@ -52,23 +61,19 @@ def handle_client(client_socket, client_address, datastore):
 
 def main():
     print("Redis server start...")
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=6379, help="The port for the server to listen on")
-    args = parser.parse_args()
     
-    port = args.port
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=6379)
+    args = parser.parse_args()
     
     datastore = RedisDataStore()
     
-    server_socket = socket.create_server(("localhost", port))
+    server_socket = socket.create_server(("localhost", args.port))
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
-    print(f"Server listen on localhost {port}")
+    print(f"Server listen on localhost {args.port}")
     
     while True:
         client_socket, client_address = server_socket.accept()
-        
         client_thread = threading.Thread(
             target=handle_client,
             args=(client_socket, client_address, datastore),

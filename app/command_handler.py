@@ -1,19 +1,19 @@
 import time
 from . import protocol
 
-def handle_ping(parts):
+
+def handle_ping(parts, datastore):
     return protocol.format_simple_string("PONG")
 
-def handle_echo(parts):
-    message = parts[4]
-    return protocol.format_bulk_string(message)
+def handle_echo(parts, datastore):
+    return protocol.format_bulk_string(parts[4])
 
 def handle_set(parts, datastore):
-    key = parts[4]
-    value = parts[6]
+    key, value = parts[4], parts[6]
     expiry_ms = None
     if len(parts) > 8 and parts[8].decode().upper() == 'PX':
-        expiry_ms = int(parts[10].decode())
+        expiry_duration_ms = int(parts[10].decode())
+        expiry_ms = int(time.time() * 1000) + expiry_duration_ms
     
     datastore.set_item(key, ('string', (value, expiry_ms)))
     return protocol.format_simple_string("OK")
@@ -23,9 +23,29 @@ def handle_get(parts, datastore):
     item = datastore.get_item(key)
     if not item or item[0] != 'string':
         return protocol.format_bulk_string(None)
-    
     value, _ = item[1]
     return protocol.format_bulk_string(value)
+
+def handle_incr(parts, datastore):
+    key = parts[4]
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if item is None:
+            new_value = 1
+            datastore.set_item(key, ('string', (b'1', None)))
+            return protocol.format_integer(new_value)
+        
+        if item[0] != 'string':
+            return protocol.format_error("WRONGTYPE Operation against a key holding the wrong kind of value")
+        
+        try:
+            current_value = int(item[1][0].decode())
+            new_value = current_value + 1
+            datastore.set_item(key, ('string', (str(new_value).encode(), item[1][1])))
+            return protocol.format_integer(new_value)
+        except ValueError:
+            return protocol.format_error("value is not an integer or out of range")
+
 
 def handle_type(parts, datastore):
     key = parts[4]
@@ -36,14 +56,13 @@ def handle_type(parts, datastore):
     return protocol.format_simple_string(type_name)
 
 
-# use for create function or feature
-
 COMMAND_HANDLERS = {
     "PING": handle_ping,
     "ECHO": handle_echo,
     "SET": handle_set,
     "GET": handle_get,
     "TYPE": handle_type,
+    "INCR": handle_incr,
 }
 
 def handle_command(parts, datastore):
@@ -53,7 +72,4 @@ def handle_command(parts, datastore):
     if not handler:
         return protocol.format_error(f"unknown command '{command_name}'")
     
-    if command_name in ["SET", "GET", "TYPE", "INCR", "XADD", "XRANGE", "XREAD"]:
-        return handler(parts, datastore)
-    else:
-        return handler(parts)
+    return handler(parts, datastore)
