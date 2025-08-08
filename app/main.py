@@ -1,5 +1,6 @@
 import socket
 import threading
+import argparse
 from .datastore import RedisDataStore
 from .command_handler import handle_command
 
@@ -51,12 +52,19 @@ def handle_client(client_socket, client_address, datastore):
 
 def main():
     print("Redis server start...")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=6379, help="The port for the server to listen on")
+    args = parser.parse_args()
+    
+    port = args.port
     
     datastore = RedisDataStore()
     
-    server_socket = socket.create_server(("localhost", 6379))
+    server_socket = socket.create_server(("localhost", port))
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    print("Server listen on localhost 6379")
+    
+    print(f"Server listen on localhost {port}")
     
     while True:
         client_socket, client_address = server_socket.accept()
