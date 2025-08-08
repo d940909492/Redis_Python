@@ -27,11 +27,13 @@ class RedisDataStore:
                 self.blocking_conditions[key] = threading.Condition(self.lock)
             return self.blocking_conditions[key]
 
-    def notify_waiters(self, key):
+    def notify_waiters(self, key, notify_all=False):
         with self.lock:
             if key in self.blocking_conditions:
                 condition = self.blocking_conditions[key]
-                condition.notify()
+                if notify_all:
+                    condition.notify_all()
+                else:
+                    condition.notify()
                 if not getattr(condition, '_waiters', True):
                     del self.blocking_conditions[key]
-                    

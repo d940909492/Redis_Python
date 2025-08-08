@@ -23,7 +23,10 @@ def handle_get(parts, datastore):
     key = parts[4]
     with datastore.lock:
         item = datastore.get_item(key)
-    if not item or item[0] != 'string': return protocol.format_bulk_string(None)
+    
+    if not item or item[0] != 'string':
+        return protocol.format_bulk_string(None)
+    
     value, _ = item[1]
     return protocol.format_bulk_string(value)
 
@@ -63,6 +66,7 @@ def handle_lpush(parts, datastore):
         elements.reverse()
         current_list[:0] = elements
         if not item: datastore.set_item(key, ('list', current_list))
+        datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
 
 def handle_rpush(parts, datastore):
@@ -74,7 +78,42 @@ def handle_rpush(parts, datastore):
         current_list = item[1] if item else []
         current_list.extend(elements)
         if not item: datastore.set_item(key, ('list', current_list))
+        datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
+
+def handle_lpop(parts, datastore):
+    key = parts[4]
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if not item or item[0] != 'list' or not item[1]:
+            return protocol.format_bulk_string(None)
+        
+        popped_element = item[1].pop(0)
+        return protocol.format_bulk_string(popped_element)
+
+def handle_llen(parts, datastore):
+    key = parts[4]
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if not item or item[0] != 'list':
+            return protocol.format_integer(0)
+        return protocol.format_integer(len(item[1]))
+
+def handle_lrange(parts, datastore):
+    key = parts[4]
+    start, end = int(parts[6].decode()), int(parts[8].decode())
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if not item or item[0] != 'list':
+            return protocol.format_array([])
+        
+        the_list = item[1]
+        sub_list = the_list[start:] if end == -1 else the_list[start:end+1]
+
+        response_parts = [f"*{len(sub_list)}\r\n".encode()]
+        for list_item in sub_list:
+            response_parts.append(protocol.format_bulk_string(list_item))
+        return b"".join(response_parts)
 
 def handle_xadd(parts, datastore):
     key = parts[4]
@@ -110,15 +149,19 @@ def handle_xadd(parts, datastore):
                 if ms_time < last_ms or (ms_time == last_ms and seq_num <= last_seq):
                     return protocol.format_error("The ID specified in XADD is equal or smaller than the target stream top item")
             entry_id_bytes_to_store = parts[6]
-        
-        entry_data = {parts[i]: parts[i+1] for i in range(8, len(parts), 2)}
+
+        field_value_parts = parts[8::2]
+        entry_data = {field_value_parts[i]: field_value_parts[i+1] for i in range(0, len(field_value_parts), 2)}
         new_entry = (entry_id_bytes_to_store, entry_data)
+        
         item = datastore.get_item(key)
         if item and item[0] == 'stream':
             item[1].append(new_entry)
         else:
             datastore.set_item(key, ('stream', [new_entry]))
+        
         datastore.notify_waiters(key, notify_all=True)
+    
     return protocol.format_bulk_string(entry_id_bytes_to_store)
 
 def handle_xrange(parts, datastore):
@@ -140,13 +183,47 @@ def handle_xrange(parts, datastore):
                     results.append(entry)
     return protocol.format_stream_range_response(results)
 
+def handle_xread(parts, datastore):
+    try:
+        streams_idx = parts.index(b'streams')
+        num_keys = (len(parts) - streams_idx - 1) // 4
+        keys_start, ids_start = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
+        keys = parts[keys_start:ids_start:2]
+        start_ids_str = [p.decode() for p in parts[ids_start::2]]
+    except (ValueError, IndexError):
+        return protocol.format_error("syntax error")
+
+    def parse_id(id_str):
+        if id_str == '$': return '$'
+        return tuple(map(int, id_str.split('-')))
+
+    all_results = {}
+    with datastore.lock:
+        for i, key in enumerate(keys):
+            id_val = start_ids_str[i]
+            if id_val == '$':
+                item = datastore.get_item(key)
+                start_id = parse_id(item[1][-1][0].decode()) if item and item[1] else (0, 0)
+            else:
+                start_id = parse_id(id_val)
+            
+            key_results = []
+            item = datastore.get_item(key)
+            if item and item[0] == 'stream':
+                for entry in item[1]:
+                    if parse_id(entry[0].decode()) > start_id:
+                        key_results.append(entry)
+            if key_results:
+                all_results[key] = key_results
+    return protocol.format_xread_response(all_results)
 
 COMMAND_HANDLERS = {
     "PING": handle_ping, "ECHO": handle_echo,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
     "TYPE": handle_type,
     "LPUSH": handle_lpush, "RPUSH": handle_rpush,
-    "XADD": handle_xadd, "XRANGE": handle_xrange,
+    "LPOP": handle_lpop, "LLEN": handle_llen, "LRANGE": handle_lrange,
+    "XADD": handle_xadd, "XRANGE": handle_xrange, "XREAD": handle_xread,
 }
 
 def handle_command(parts, datastore):

@@ -44,6 +44,28 @@ def handle_client(client_socket, client_address, datastore):
                     in_transaction = False
                     transaction_queue = []
                     client_socket.sendall(protocol.format_simple_string("OK"))
+            elif command_name == "BLPOP":
+                key = parts[4]
+                timeout = float(parts[6].decode())
+                response = b""
+                with datastore.lock:
+                    item = datastore.get_item(key)
+                    if item and item[0] == 'list' and item[1]:
+                        popped = item[1].pop(0)
+                        response_arr = [protocol.format_bulk_string(key), protocol.format_bulk_string(popped)]
+                        response = protocol.format_array(response_arr)
+                    else:
+                        condition = datastore.get_condition_for_key(key)
+                        was_notified = condition.wait(timeout=None if timeout == 0 else timeout)
+                        if was_notified:
+                            item = datastore.get_item(key)
+                            if item and item[0] == 'list' and item[1]:
+                                popped = item[1].pop(0)
+                                response_arr = [protocol.format_bulk_string(key), protocol.format_bulk_string(popped)]
+                                response = protocol.format_array(response_arr)
+                            else: response = protocol.format_bulk_string(None)
+                        else: response = protocol.format_bulk_string(None)
+                client_socket.sendall(response)
             else:
                 response = handle_command(parts, datastore)
                 client_socket.sendall(response)
