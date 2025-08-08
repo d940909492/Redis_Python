@@ -3,6 +3,7 @@ import threading
 import argparse
 from .datastore import RedisDataStore
 from .command_handler import handle_command
+from . import protocol
 
 def handle_client(client_socket, client_address, datastore):
     print(f"Connect from {client_address}")
@@ -20,35 +21,32 @@ def handle_client(client_socket, client_address, datastore):
 
             if in_transaction and command_name not in ["EXEC", "DISCARD", "MULTI"]:
                 transaction_queue.append(parts)
-                client_socket.sendall(b"+QUEUED\r\n")
+                client_socket.sendall(protocol.format_simple_string("QUEUED"))
                 continue
 
             if command_name == "MULTI":
                 in_transaction = True
                 transaction_queue = []
-                client_socket.sendall(b"+OK\r\n")
+                client_socket.sendall(protocol.format_simple_string("OK"))
             elif command_name == "EXEC":
                 if not in_transaction:
-                    client_socket.sendall(b"-ERR EXEC without MULTI\r\n")
+                    client_socket.sendall(protocol.format_error("EXEC without MULTI"))
                 else:
                     responses = []
                     for queued_parts in transaction_queue:
-                        response = handle_command(queued_parts, datastore)
-                        responses.append(response)
-
-                    final_response_parts = [f"*{len(responses)}\r\n".encode()]
-                    final_response_parts.extend(responses)
-                    client_socket.sendall(b"".join(final_response_parts))
+                        response_bytes = handle_command(queued_parts, datastore)
+                        responses.append(response_bytes)
                     
+                    client_socket.sendall(protocol.format_array(responses))
                     in_transaction = False
                     transaction_queue = []
             elif command_name == "DISCARD":
                 if not in_transaction:
-                     client_socket.sendall(b"-ERR DISCARD without MULTI\r\n")
+                     client_socket.sendall(protocol.format_error("DISCARD without MULTI"))
                 else:
                     in_transaction = False
                     transaction_queue = []
-                    client_socket.sendall(b"+OK\r\n")
+                    client_socket.sendall(protocol.format_simple_string("OK"))
             else:
                 response = handle_command(parts, datastore)
                 client_socket.sendall(response)

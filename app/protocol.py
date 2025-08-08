@@ -2,7 +2,7 @@ def format_simple_string(s):
     return f"+{s}\r\n".encode()
 
 def format_error(s):
-    return f"-ERR {s}\r\n".encode()
+    return f"-{s}\r\n".encode()
 
 def format_integer(i):
     return f":{i}\r\n".encode()
@@ -12,20 +12,19 @@ def format_bulk_string(b):
         return b"$-1\r\n"
     return f"${len(b)}\r\n".encode() + b + b"\r\n"
 
-def format_array(arr):
-    if arr is None:
+def format_array(arr_bytes):
+    if arr_bytes is None:
         return b"*-1\r\n"
-    if not arr:
+    if not arr_bytes:
         return b"*0\r\n"
-        
-    response_parts = [f"*{len(arr)}\r\n".encode()]
-    for item in arr:
-        response_parts.append(item)
+    
+    response_parts = [f"*{len(arr_bytes)}\r\n".encode()]
+    response_parts.extend(arr_bytes)
     return b"".join(response_parts)
 
 def format_stream_range_response(entries):
     if not entries:
-        return format_array([])
+        return b"*0\r\n"
         
     response_parts = [f"*{len(entries)}\r\n".encode()]
     for entry_id_bytes, entry_data in entries:
