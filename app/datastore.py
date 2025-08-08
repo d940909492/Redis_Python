@@ -11,35 +11,27 @@ class RedisDataStore:
         item = self.data.get(key)
         if not item:
             return None
-
         if item[0] == 'string':
             _value, expiry_ms = item[1]
             if expiry_ms is not None and int(time.time() * 1000) > expiry_ms:
-                del self.data[key]
+                if key in self.data: del self.data[key]
                 return None
-        
         return item
 
     def set_item(self, key, value):
         self.data[key] = value
 
-    def delete_item(self, key):
-        if key in self.data:
-            del self.data[key]
-   
     def get_condition_for_key(self, key):
         with self.lock:
             if key not in self.blocking_conditions:
                 self.blocking_conditions[key] = threading.Condition(self.lock)
             return self.blocking_conditions[key]
 
-    def notify_waiters(self, key, notify_all=False):
+    def notify_waiters(self, key):
         with self.lock:
             if key in self.blocking_conditions:
                 condition = self.blocking_conditions[key]
-                if notify_all:
-                    condition.notify_all()
-                else:
-                    condition.notify()
+                condition.notify()
                 if not getattr(condition, '_waiters', True):
                     del self.blocking_conditions[key]
+                    

@@ -13,8 +13,7 @@ def handle_client(client_socket, client_address, datastore):
     while True:
         try:
             request_bytes = client_socket.recv(1024)
-            if not request_bytes:
-                break
+            if not request_bytes: break
 
             parts = request_bytes.strip().split(b'\r\n')
             command_name = parts[2].decode().upper()
@@ -34,11 +33,8 @@ def handle_client(client_socket, client_address, datastore):
                 else:
                     responses = []
                     for queued_parts in transaction_queue:
-                        response = handle_command(queued_parts, datastore)
-                        responses.append(response)
-
+                        responses.append(handle_command(queued_parts, datastore))
                     client_socket.sendall(protocol.format_array(responses))
-                    
                     in_transaction = False
                     transaction_queue = []
             elif command_name == "DISCARD":
@@ -60,7 +56,6 @@ def handle_client(client_socket, client_address, datastore):
 
 def main():
     print("Redis server start...")
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
     args = parser.parse_args()
