@@ -74,6 +74,42 @@ def handle_rpush(parts, datastore):
         datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
 
+def handle_lpop(parts, datastore):
+    key = parts[4]
+    count_provided = len(parts) > 5
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if not item or item[0] != 'list' or not item[1]:
+            return protocol.format_array([]) if count_provided else protocol.format_bulk_string(None)
+        the_list = item[1]
+        if count_provided:
+            count = int(parts[6].decode())
+            pop_count = min(count, len(the_list))
+            elements_to_return = the_list[:pop_count]
+            datastore.set_item(key, ('list', the_list[pop_count:]))
+            return protocol.format_array([protocol.format_bulk_string(el) for el in elements_to_return])
+        else:
+            return protocol.format_bulk_string(the_list.pop(0))
+
+def handle_llen(parts, datastore):
+    key = parts[4]
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if not item or item[0] != 'list':
+            return protocol.format_integer(0)
+        return protocol.format_integer(len(item[1]))
+
+def handle_lrange(parts, datastore):
+    key = parts[4]
+    start, end = int(parts[6].decode()), int(parts[8].decode())
+    with datastore.lock:
+        item = datastore.get_item(key)
+        if not item or item[0] != 'list':
+            return protocol.format_array([])
+        the_list = item[1]
+        sub_list = the_list[start:] if end == -1 else the_list[start:end+1]
+        return protocol.format_array([protocol.format_bulk_string(i) for i in sub_list])
+
 def handle_xadd(parts, datastore):
     key = parts[4]
     entry_id_str = parts[6].decode()
@@ -172,12 +208,12 @@ def handle_xread(parts, datastore):
                 all_results[key] = key_results
     return protocol.format_xread_response(all_results)
 
-
 COMMAND_HANDLERS = {
     "PING": handle_ping, "ECHO": handle_echo,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
     "TYPE": handle_type,
-    "LPUSH": handle_lpush, "RPUSH": handle_rpush,
+    "LPUSH": handle_lpush, "RPUSH": handle_rpush, "LPOP": handle_lpop,
+    "LLEN": handle_llen, "LRANGE": handle_lrange,
     "XADD": handle_xadd, "XRANGE": handle_xrange, "XREAD": handle_xread,
 }
 
