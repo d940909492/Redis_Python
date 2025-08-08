@@ -82,6 +82,14 @@ def handle_client(client_socket, client_address):
 
                     in_transaction = False
                     transaction_queue = []
+            
+            elif command == "DISCARD":
+                if not in_transaction:
+                    client_socket.sendall(b"-ERR DISCARD without MULTI\r\n")
+                else:
+                    transaction_queue = []
+                    in_transaction = False
+                    client_socket.sendall(b"+OK\r\n")
 
             elif command == "TYPE":
                 key = parts[4]
