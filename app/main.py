@@ -34,15 +34,16 @@ def handle_client(client_socket, client_address, datastore):
                 else:
                     responses = []
                     for queued_parts in transaction_queue:
-                        response_bytes = handle_command(queued_parts, datastore)
-                        responses.append(response_bytes)
-                    
+                        response = handle_command(queued_parts, datastore)
+                        responses.append(response)
+
                     client_socket.sendall(protocol.format_array(responses))
+                    
                     in_transaction = False
                     transaction_queue = []
             elif command_name == "DISCARD":
                 if not in_transaction:
-                     client_socket.sendall(protocol.format_error("DISCARD without MULTI"))
+                    client_socket.sendall(protocol.format_error("DISCARD without MULTI"))
                 else:
                     in_transaction = False
                     transaction_queue = []
