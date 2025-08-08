@@ -56,9 +56,8 @@ def handle_client(client_socket, client_address, datastore):
 
 def main():
     print("Redis server start...")
-    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=6379, help="The port for the server to listen on")
+    parser.add_argument("--port", type=int, default=6379)
     args = parser.parse_args()
     
     datastore = RedisDataStore()
