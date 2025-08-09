@@ -74,9 +74,9 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         timeout_ms = int(parts[block_idx + 2].decode())
                         streams_idx = parts.index(b'streams')
                         num_keys = (len(parts) - streams_idx - 1) // 4
-                        keys_start, ids_start = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
-                        keys = parts[keys_start:ids_start:2]
-                        start_ids_str = [p.decode() for p in parts[ids_start::2]]
+                        keys_start_idx, ids_start_idx = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
+                        keys = parts[keys_start_idx:ids_start_idx:2]
+                        start_ids_str = [p.decode() for p in parts[ids_start_idx::2]]
                     except (ValueError, IndexError):
                         client_socket.sendall(protocol.format_error("syntax error"))
                         continue
@@ -130,15 +130,23 @@ def main():
     print("Redis server start...")
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
+    parser.add_argument("--replicaof", type=str, help="Start server as a replica of a master.")
     args = parser.parse_args()
     
     datastore = RedisDataStore()
     
     server_state = {
-        "role": "master",
         "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
         "master_repl_offset": 0,
     }
+    
+    if args.replicaof:
+        server_state["role"] = "slave"
+        master_host, master_port = args.replicaof.split()
+        server_state["master_host"] = master_host
+        server_state["master_port"] = int(master_port)
+    else:
+        server_state["role"] = "master"
     
     server_socket = socket.create_server(("localhost", args.port))
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
