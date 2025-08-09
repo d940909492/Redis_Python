@@ -10,9 +10,15 @@ def handle_echo(parts, datastore, server_state):
 def handle_info(parts, datastore, server_state):
     section = parts[4].decode().lower()
     if section == "replication":
-        role = server_state["role"]
-        response_str = f"role:{role}"
+        info_lines = [f"role:{server_state['role']}"]
+        
+        if server_state['role'] == 'master':
+            info_lines.append(f"master_replid:{server_state['master_replid']}")
+            info_lines.append(f"master_repl_offset:{server_state['master_repl_offset']}")
+        
+        response_str = "\r\n".join(info_lines)
         return protocol.format_bulk_string(response_str.encode())
+    
     return protocol.format_bulk_string(b"")
 
 def handle_set(parts, datastore, server_state):
