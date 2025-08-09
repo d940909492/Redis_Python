@@ -1,13 +1,21 @@
 import time
 from . import protocol
 
-def handle_ping(parts, datastore):
+def handle_ping(parts, datastore, server_state):
     return protocol.format_simple_string("PONG")
 
-def handle_echo(parts, datastore):
+def handle_echo(parts, datastore, server_state):
     return protocol.format_bulk_string(parts[4])
 
-def handle_set(parts, datastore):
+def handle_info(parts, datastore, server_state):
+    section = parts[4].decode().lower()
+    if section == "replication":
+        role = server_state["role"]
+        response_str = f"role:{role}"
+        return protocol.format_bulk_string(response_str.encode())
+    return protocol.format_bulk_string(b"")
+
+def handle_set(parts, datastore, server_state):
     key, value = parts[4], parts[6]
     expiry_ms = None
     if len(parts) > 8 and parts[8].decode().upper() == 'PX':
@@ -17,7 +25,7 @@ def handle_set(parts, datastore):
         datastore.set_item(key, ('string', (value, expiry_ms)))
     return protocol.format_simple_string("OK")
 
-def handle_get(parts, datastore):
+def handle_get(parts, datastore, server_state):
     key = parts[4]
     with datastore.lock:
         item = datastore.get_item(key)
@@ -25,7 +33,7 @@ def handle_get(parts, datastore):
     value, _ = item[1]
     return protocol.format_bulk_string(value)
 
-def handle_incr(parts, datastore):
+def handle_incr(parts, datastore, server_state):
     key = parts[4]
     with datastore.lock:
         item = datastore.get_item(key)
@@ -43,7 +51,7 @@ def handle_incr(parts, datastore):
         except ValueError:
             return protocol.format_error("value is not an integer or out of range")
 
-def handle_type(parts, datastore):
+def handle_type(parts, datastore, server_state):
     key = parts[4]
     with datastore.lock:
         item = datastore.get_item(key)
@@ -51,7 +59,7 @@ def handle_type(parts, datastore):
     if item: type_name = item[0]
     return protocol.format_simple_string(type_name)
 
-def handle_lpush(parts, datastore):
+def handle_lpush(parts, datastore, server_state):
     key = parts[4]
     elements = parts[6::2]
     with datastore.lock:
@@ -63,7 +71,7 @@ def handle_lpush(parts, datastore):
         datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
 
-def handle_rpush(parts, datastore):
+def handle_rpush(parts, datastore, server_state):
     key = parts[4]
     elements = parts[6::2]
     with datastore.lock:
@@ -74,7 +82,7 @@ def handle_rpush(parts, datastore):
         datastore.notify_waiters(key)
     return protocol.format_integer(len(current_list))
 
-def handle_lpop(parts, datastore):
+def handle_lpop(parts, datastore, server_state):
     key = parts[4]
     count_provided = len(parts) > 5
     with datastore.lock:
@@ -91,7 +99,7 @@ def handle_lpop(parts, datastore):
         else:
             return protocol.format_bulk_string(the_list.pop(0))
 
-def handle_llen(parts, datastore):
+def handle_llen(parts, datastore, server_state):
     key = parts[4]
     with datastore.lock:
         item = datastore.get_item(key)
@@ -99,7 +107,7 @@ def handle_llen(parts, datastore):
             return protocol.format_integer(0)
         return protocol.format_integer(len(item[1]))
 
-def handle_lrange(parts, datastore):
+def handle_lrange(parts, datastore, server_state):
     key = parts[4]
     start, end = int(parts[6].decode()), int(parts[8].decode())
     with datastore.lock:
@@ -110,7 +118,7 @@ def handle_lrange(parts, datastore):
         sub_list = the_list[start:] if end == -1 else the_list[start:end+1]
         return protocol.format_array([protocol.format_bulk_string(i) for i in sub_list])
 
-def handle_xadd(parts, datastore):
+def handle_xadd(parts, datastore, server_state):
     key = parts[4]
     entry_id_str = parts[6].decode()
     with datastore.lock:
@@ -156,7 +164,7 @@ def handle_xadd(parts, datastore):
         datastore.notify_waiters(key, notify_all=True)
     return protocol.format_bulk_string(entry_id_bytes_to_store)
 
-def handle_xrange(parts, datastore):
+def handle_xrange(parts, datastore, server_state):
     key = parts[4]
     start_id_str, end_id_str = parts[6].decode(), parts[8].decode()
     def parse_range_id(id_str, is_end_id=False):
@@ -175,7 +183,7 @@ def handle_xrange(parts, datastore):
                     results.append(entry)
     return protocol.format_stream_range_response(results)
 
-def handle_xread(parts, datastore):
+def handle_xread(parts, datastore, server_state):
     try:
         streams_idx = parts.index(b'streams')
         num_keys = (len(parts) - streams_idx - 1) // 4
@@ -209,7 +217,7 @@ def handle_xread(parts, datastore):
     return protocol.format_xread_response(all_results)
 
 COMMAND_HANDLERS = {
-    "PING": handle_ping, "ECHO": handle_echo,
+    "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
     "TYPE": handle_type,
     "LPUSH": handle_lpush, "RPUSH": handle_rpush, "LPOP": handle_lpop,
@@ -217,9 +225,9 @@ COMMAND_HANDLERS = {
     "XADD": handle_xadd, "XRANGE": handle_xrange, "XREAD": handle_xread,
 }
 
-def handle_command(parts, datastore):
+def handle_command(parts, datastore, server_state):
     command_name = parts[2].decode().upper()
     handler = COMMAND_HANDLERS.get(command_name)
     if not handler:
         return protocol.format_error(f"unknown command '{command_name}'")
-    return handler(parts, datastore)
+    return handler(parts, datastore, server_state)

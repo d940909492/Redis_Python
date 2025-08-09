@@ -5,7 +5,7 @@ from .datastore import RedisDataStore
 from .command_handler import handle_command
 from . import protocol
 
-def handle_client(client_socket, client_address, datastore):
+def handle_client(client_socket, client_address, datastore, server_state):
     print(f"Connect from {client_address}")
     in_transaction = False
     transaction_queue = []
@@ -33,7 +33,7 @@ def handle_client(client_socket, client_address, datastore):
                 else:
                     responses = []
                     for queued_parts in transaction_queue:
-                        responses.append(handle_command(queued_parts, datastore))
+                        responses.append(handle_command(queued_parts, datastore, server_state))
                     client_socket.sendall(protocol.format_array(responses))
                     in_transaction = False
                     transaction_queue = []
@@ -67,7 +67,7 @@ def handle_client(client_socket, client_address, datastore):
                         else: response = protocol.format_bulk_string(None)
                 client_socket.sendall(response)
             elif command_name == "XREAD" and b'block' in [p.lower() for p in parts]:
-                response = handle_command(parts, datastore)
+                response = handle_command(parts, datastore, server_state)
                 if response == protocol.format_bulk_string(None):
                     try:
                         block_idx = parts.index(b'block')
@@ -94,7 +94,7 @@ def handle_client(client_socket, client_address, datastore):
                                 resolved_start_ids[key] = parse_id(item[1][-1][0].decode()) if item and item[1] else (0,0)
                             else:
                                 resolved_start_ids[key] = parse_id(id_val)
-
+                    
                     condition = datastore.get_condition_for_key(keys[0])
                     with datastore.lock:
                         was_notified = condition.wait(timeout=timeout_ms / 1000.0 if timeout_ms > 0 else None)
@@ -117,7 +117,7 @@ def handle_client(client_socket, client_address, datastore):
                 else:
                     client_socket.sendall(response)
             else:
-                response = handle_command(parts, datastore)
+                response = handle_command(parts, datastore, server_state)
                 client_socket.sendall(response)
 
         except (IndexError, ConnectionResetError, ValueError):
@@ -134,6 +134,12 @@ def main():
     
     datastore = RedisDataStore()
     
+    server_state = {
+        "role": "master",
+        "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+        "master_repl_offset": 0,
+    }
+    
     server_socket = socket.create_server(("localhost", args.port))
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     print(f"Server listen on localhost {args.port}")
@@ -142,7 +148,7 @@ def main():
         client_socket, client_address = server_socket.accept()
         client_thread = threading.Thread(
             target=handle_client,
-            args=(client_socket, client_address, datastore),
+            args=(client_socket, client_address, datastore, server_state),
             daemon=True
         )
         client_thread.start()
