@@ -74,9 +74,9 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         timeout_ms = int(parts[block_idx + 2].decode())
                         streams_idx = parts.index(b'streams')
                         num_keys = (len(parts) - streams_idx - 1) // 4
-                        keys_start, ids_start = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
-                        keys = parts[keys_start:ids_start:2]
-                        start_ids_str = [p.decode() for p in parts[ids_start::2]]
+                        keys_start_idx, ids_start_idx = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
+                        keys = parts[keys_start_idx:ids_start_idx:2]
+                        start_ids_str = [p.decode() for p in parts[ids_start_idx::2]]
                     except (ValueError, IndexError):
                         client_socket.sendall(protocol.format_error("syntax error"))
                         continue
@@ -152,6 +152,14 @@ def connect_to_master(server_state, replica_port):
             protocol.format_bulk_string(b"psync2")
         ])
         master_socket.sendall(replconf_capa_command)
+        master_socket.recv(1024)
+
+        psync_command = protocol.format_array([
+            protocol.format_bulk_string(b"PSYNC"),
+            protocol.format_bulk_string(b"?"),
+            protocol.format_bulk_string(b"-1")
+        ])
+        master_socket.sendall(psync_command)
         master_socket.recv(1024)
 
     except Exception as e:
