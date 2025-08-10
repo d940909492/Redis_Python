@@ -11,7 +11,7 @@ class RedisDataStore:
         item = self.data.get(key)
         if not item:
             return None
-        
+
         if item[0] == 'string':
             _value, expiry_ms = item[1]
             if expiry_ms is not None and int(time.time() * 1000) > expiry_ms:
