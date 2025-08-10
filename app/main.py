@@ -126,6 +126,24 @@ def handle_client(client_socket, client_address, datastore, server_state):
     print(f"Closing connection from {client_address}")
     client_socket.close()
 
+def connect_to_master(server_state):
+    """Connects to the master and performs the handshake."""
+    master_host = server_state["master_host"]
+    master_port = server_state["master_port"]
+    
+    try:
+        master_socket = socket.create_connection((master_host, master_port))
+        print(f"Connected to master at {master_host}:{master_port}")
+
+        ping_command = protocol.format_array([protocol.format_bulk_string(b"PING")])
+        master_socket.sendall(ping_command)
+        response = master_socket.recv(1024)
+        print(f"Received from master after PING: {response}")
+
+
+    except Exception as e:
+        print(f"Error connecting to master: {e}")
+
 def main():
     print("Redis server start...")
     parser = argparse.ArgumentParser()
@@ -145,6 +163,9 @@ def main():
         master_host, master_port = args.replicaof.split()
         server_state["master_host"] = master_host
         server_state["master_port"] = int(master_port)
+
+        handshake_thread = threading.Thread(target=connect_to_master, args=(server_state,))
+        handshake_thread.start()
     else:
         server_state["role"] = "master"
     
