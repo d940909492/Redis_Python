@@ -74,9 +74,9 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         timeout_ms = int(parts[block_idx + 2].decode())
                         streams_idx = parts.index(b'streams')
                         num_keys = (len(parts) - streams_idx - 1) // 4
-                        keys_start_idx, ids_start_idx = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
-                        keys = parts[keys_start_idx:ids_start_idx:2]
-                        start_ids_str = [p.decode() for p in parts[ids_start_idx::2]]
+                        keys_start, ids_start = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
+                        keys = parts[keys_start:ids_start:2]
+                        start_ids_str = [p.decode() for p in parts[ids_start::2]]
                     except (ValueError, IndexError):
                         client_socket.sendall(protocol.format_error("syntax error"))
                         continue
@@ -126,8 +126,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
     print(f"Closing connection from {client_address}")
     client_socket.close()
 
-def connect_to_master(server_state):
-    """Connects to the master and performs the handshake."""
+def connect_to_master(server_state, replica_port):
     master_host = server_state["master_host"]
     master_port = server_state["master_port"]
     
@@ -137,9 +136,23 @@ def connect_to_master(server_state):
 
         ping_command = protocol.format_array([protocol.format_bulk_string(b"PING")])
         master_socket.sendall(ping_command)
-        response = master_socket.recv(1024)
-        print(f"Received from master after PING: {response}")
+        master_socket.recv(1024)
 
+        replconf_port_command = protocol.format_array([
+            protocol.format_bulk_string(b"REPLCONF"),
+            protocol.format_bulk_string(b"listening-port"),
+            protocol.format_bulk_string(str(replica_port).encode())
+        ])
+        master_socket.sendall(replconf_port_command)
+        master_socket.recv(1024)
+
+        replconf_capa_command = protocol.format_array([
+            protocol.format_bulk_string(b"REPLCONF"),
+            protocol.format_bulk_string(b"capa"),
+            protocol.format_bulk_string(b"psync2")
+        ])
+        master_socket.sendall(replconf_capa_command)
+        master_socket.recv(1024)
 
     except Exception as e:
         print(f"Error connecting to master: {e}")
@@ -163,8 +176,7 @@ def main():
         master_host, master_port = args.replicaof.split()
         server_state["master_host"] = master_host
         server_state["master_port"] = int(master_port)
-
-        handshake_thread = threading.Thread(target=connect_to_master, args=(server_state,))
+        handshake_thread = threading.Thread(target=connect_to_master, args=(server_state, args.port))
         handshake_thread.start()
     else:
         server_state["role"] = "master"

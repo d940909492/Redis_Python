@@ -1,25 +1,12 @@
 import time
 from . import protocol
 
+
 def handle_ping(parts, datastore, server_state):
     return protocol.format_simple_string("PONG")
 
 def handle_echo(parts, datastore, server_state):
     return protocol.format_bulk_string(parts[4])
-
-def handle_info(parts, datastore, server_state):
-    section = parts[4].decode().lower()
-    if section == "replication":
-        info_lines = [f"role:{server_state['role']}"]
-        
-        if server_state['role'] == 'master':
-            info_lines.append(f"master_replid:{server_state['master_replid']}")
-            info_lines.append(f"master_repl_offset:{server_state['master_repl_offset']}")
-        
-        response_str = "\r\n".join(info_lines)
-        return protocol.format_bulk_string(response_str.encode())
-    
-    return protocol.format_bulk_string(b"")
 
 def handle_set(parts, datastore, server_state):
     key, value = parts[4], parts[6]
@@ -222,8 +209,23 @@ def handle_xread(parts, datastore, server_state):
                 all_results[key] = key_results
     return protocol.format_xread_response(all_results)
 
+def handle_info(parts, datastore, server_state):
+    section = parts[4].decode().lower()
+    if section == "replication":
+        info_lines = [f"role:{server_state['role']}"]
+        if server_state['role'] == 'master':
+            info_lines.append(f"master_replid:{server_state['master_replid']}")
+            info_lines.append(f"master_repl_offset:{server_state['master_repl_offset']}")
+        response_str = "\r\n".join(info_lines)
+        return protocol.format_bulk_string(response_str.encode())
+    return protocol.format_bulk_string(b"")
+
+def handle_replconf(parts, datastore, server_state):
+    return protocol.format_simple_string("OK")
+
+
 COMMAND_HANDLERS = {
-    "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info,
+    "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info, "REPLCONF": handle_replconf,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
     "TYPE": handle_type,
     "LPUSH": handle_lpush, "RPUSH": handle_rpush, "LPOP": handle_lpop,
