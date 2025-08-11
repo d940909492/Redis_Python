@@ -1,7 +1,6 @@
 import time
 from . import protocol
 
-
 def handle_ping(parts, datastore, server_state):
     return protocol.format_simple_string("PONG")
 
@@ -227,11 +226,12 @@ def handle_psync(parts, datastore, server_state):
     replid = server_state["master_replid"]
     offset = server_state["master_repl_offset"]
     response_str = f"FULLRESYNC {replid} {offset}"
-    return protocol.format_simple_string(response_str)
+    return (protocol.format_simple_string(response_str), "SEND_RDB_FILE")
 
 
 COMMAND_HANDLERS = {
-    "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info, "REPLCONF": handle_replconf, "PSYNC": handle_psync,
+    "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info,
+    "REPLCONF": handle_replconf, "PSYNC": handle_psync,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
     "TYPE": handle_type,
     "LPUSH": handle_lpush, "RPUSH": handle_rpush, "LPOP": handle_lpop,

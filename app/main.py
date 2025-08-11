@@ -5,6 +5,10 @@ from .datastore import RedisDataStore
 from .command_handler import handle_command
 from . import protocol
 
+#for EMPTY_RDB_HEX, you can set it to whatever you want
+EMPTY_RDB_HEX = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc226404000fa0c616f662d707265616d626c65c000fffe00f7e03ac95225"
+EMPTY_RDB_CONTENT = bytes.fromhex(EMPTY_RDB_HEX)
+
 def handle_client(client_socket, client_address, datastore, server_state):
     print(f"Connect from {client_address}")
     in_transaction = False
@@ -52,8 +56,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     item = datastore.get_item(key)
                     if item and item[0] == 'list' and item[1]:
                         popped = item[1].pop(0)
-                        response_arr = [protocol.format_bulk_string(key), protocol.format_bulk_string(popped)]
-                        response = protocol.format_array(response_arr)
+                        response = protocol.format_array([protocol.format_bulk_string(key), protocol.format_bulk_string(popped)])
                     else:
                         condition = datastore.get_condition_for_key(key)
                         was_notified = condition.wait(timeout=None if timeout == 0 else timeout)
@@ -61,8 +64,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
                             item = datastore.get_item(key)
                             if item and item[0] == 'list' and item[1]:
                                 popped = item[1].pop(0)
-                                response_arr = [protocol.format_bulk_string(key), protocol.format_bulk_string(popped)]
-                                response = protocol.format_array(response_arr)
+                                response = protocol.format_array([protocol.format_bulk_string(key), protocol.format_bulk_string(popped)])
                             else: response = protocol.format_bulk_string(None)
                         else: response = protocol.format_bulk_string(None)
                 client_socket.sendall(response)
@@ -118,7 +120,14 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     client_socket.sendall(response)
             else:
                 response = handle_command(parts, datastore, server_state)
-                client_socket.sendall(response)
+                if isinstance(response, tuple):
+                    response_bytes, action = response
+                    client_socket.sendall(response_bytes)
+                    if action == "SEND_RDB_FILE":
+                        rdb_response = f"${len(EMPTY_RDB_CONTENT)}\r\n".encode() + EMPTY_RDB_CONTENT
+                        client_socket.sendall(rdb_response)
+                else:
+                    client_socket.sendall(response)
 
         except (IndexError, ConnectionResetError, ValueError):
             break
@@ -134,33 +143,28 @@ def connect_to_master(server_state, replica_port):
         master_socket = socket.create_connection((master_host, master_port))
         print(f"Connected to master at {master_host}:{master_port}")
 
-        ping_command = protocol.format_array([protocol.format_bulk_string(b"PING")])
-        master_socket.sendall(ping_command)
+        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PING")]))
         master_socket.recv(1024)
 
-        replconf_port_command = protocol.format_array([
+        master_socket.sendall(protocol.format_array([
             protocol.format_bulk_string(b"REPLCONF"),
             protocol.format_bulk_string(b"listening-port"),
             protocol.format_bulk_string(str(replica_port).encode())
-        ])
-        master_socket.sendall(replconf_port_command)
+        ]))
         master_socket.recv(1024)
 
-        replconf_capa_command = protocol.format_array([
+        master_socket.sendall(protocol.format_array([
             protocol.format_bulk_string(b"REPLCONF"),
             protocol.format_bulk_string(b"capa"),
             protocol.format_bulk_string(b"psync2")
-        ])
-        master_socket.sendall(replconf_capa_command)
+        ]))
         master_socket.recv(1024)
 
-        psync_command = protocol.format_array([
+        master_socket.sendall(protocol.format_array([
             protocol.format_bulk_string(b"PSYNC"),
             protocol.format_bulk_string(b"?"),
             protocol.format_bulk_string(b"-1")
-        ])
-        master_socket.sendall(psync_command)
-        master_socket.recv(1024)
+        ]))
 
     except Exception as e:
         print(f"Error connecting to master: {e}")
