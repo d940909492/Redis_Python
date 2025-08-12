@@ -167,7 +167,7 @@ def connect_to_master(server_state, replica_port, datastore):
             protocol.format_bulk_string(b"PSYNC"),
             protocol.format_bulk_string(b"?"),
             protocol.format_bulk_string(b"-1")]))
-
+        
         fullresync_response = master_socket.recv(1024)
         print(f"Received FULLRESYNC from master: {fullresync_response}")
 
