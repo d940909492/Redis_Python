@@ -1,7 +1,6 @@
 import time
 from . import protocol
 
-
 def handle_ping(parts, datastore, server_state):
     return protocol.format_simple_string("PONG")
 
@@ -239,6 +238,8 @@ COMMAND_HANDLERS = {
     "LLEN": handle_llen, "LRANGE": handle_lrange,
     "XADD": handle_xadd, "XRANGE": handle_xrange, "XREAD": handle_xread,
 }
+
+WRITE_COMMANDS = {"SET", "INCR", "LPUSH", "RPUSH", "LPOP", "XADD"}
 
 def handle_command(parts, datastore, server_state):
     command_name = parts[2].decode().upper()
