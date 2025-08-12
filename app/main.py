@@ -2,6 +2,13 @@ import socket
 import sys
 import threading
 from datastore import handle_command
+from command_handler import handle_command_from_command_handler
+from protocol import parse_request, encode_response
+import sys
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 
 def parse_resp_array(data):
     """Parse one RESP array command from data; return (parts, rest_data)."""
