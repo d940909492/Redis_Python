@@ -1,7 +1,5 @@
 import threading
 import time
-from command_handler import handle_command_from_command_handler
-from protocol import parse_request, encode_response
 
 class RedisDataStore:
     def __init__(self):
