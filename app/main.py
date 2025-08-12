@@ -150,7 +150,6 @@ def connect_to_master(server_state, replica_port, datastore):
     try:
         master_socket = socket.create_connection((master_host, master_port))
         print(f"Connected to master at {master_host}:{master_port}")
-
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PING")]))
         master_socket.recv(1024)
         master_socket.sendall(protocol.format_array([
@@ -168,14 +167,13 @@ def connect_to_master(server_state, replica_port, datastore):
             protocol.format_bulk_string(b"?"),
             protocol.format_bulk_string(b"-1")]))
 
-        master_socket.recv(1024)
-
-        rdb_header = b""
-        while not rdb_header.endswith(b"\r\n"):
-            rdb_header += master_socket.recv(1)
-
-        length = int(rdb_header.strip()[1:])
-        master_socket.recv(length)
+        response = master_socket.recv(1024)
+        if response.startswith(b"+FULLRESYNC"):
+            rdb_header = b""
+            while not rdb_header.endswith(b"\r\n"):
+                rdb_header += master_socket.recv(1)
+            length = int(rdb_header.strip()[1:])
+            master_socket.recv(length)
 
         while True:
             propagated_command = master_socket.recv(1024)
