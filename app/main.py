@@ -145,7 +145,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
         server_state["replicas"].remove(client_socket)
     client_socket.close()
 
-def connect_to_master(server_state, replica_port):
+def connect_to_master(server_state, replica_port, datastore):
     master_host, master_port = server_state["master_host"], server_state["master_port"]
     try:
         master_socket = socket.create_connection((master_host, master_port))
@@ -166,8 +166,16 @@ def connect_to_master(server_state, replica_port):
             protocol.format_bulk_string(b"PSYNC"),
             protocol.format_bulk_string(b"?"),
             protocol.format_bulk_string(b"-1")]))
+
+        while True:
+            propagated_command = master_socket.recv(1024)
+            if not propagated_command:
+                break
+            parts = propagated_command.strip().split(b'\r\n')
+            handle_command(parts, datastore, server_state)
+            
     except Exception as e:
-        print(f"Error connecting to master: {e}")
+        print(f"Error in master connection: {e}")
 
 def main():
     print("Redis server start...")
@@ -189,7 +197,7 @@ def main():
         master_host, master_port = args.replicaof.split()
         server_state["master_host"] = master_host
         server_state["master_port"] = int(master_port)
-        handshake_thread = threading.Thread(target=connect_to_master, args=(server_state, args.port))
+        handshake_thread = threading.Thread(target=connect_to_master, args=(server_state, args.port, datastore))
         handshake_thread.start()
     else:
         server_state["role"] = "master"
