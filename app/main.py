@@ -8,6 +8,55 @@ from . import protocol
 EMPTY_RDB_HEX = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc226404000fa0c616f662d707265616d626c65c000fffe00f7e03ac95225"
 EMPTY_RDB_CONTENT = bytes.fromhex(EMPTY_RDB_HEX)
 
+def parse_commands_from_buffer(buffer):
+    """
+    Parses multiple commands from a stream buffer.
+    Returns a list of commands (as 'parts' lists) and the remaining, unprocessed buffer.
+    """
+    commands = []
+    while buffer:
+        if not buffer.startswith(b'*'):
+            break
+        
+        crlf1 = buffer.find(b'\r\n')
+        if crlf1 == -1:
+            break
+
+        try:
+            num_elements = int(buffer[1:crlf1])
+            
+            current_pos = crlf1 + 2
+            command_parts = [buffer[:crlf1]]
+
+            for _ in range(num_elements):
+                if not buffer[current_pos:].startswith(b'$'):
+                    raise ValueError("Expected bulk string prefix")
+                
+                crlf2 = buffer.find(b'\r\n', current_pos)
+                if crlf2 == -1:
+                    raise ValueError("Incomplete bulk string length")
+                
+                length = int(buffer[current_pos+1:crlf2])
+                
+                data_start = crlf2 + 2
+                data_end = data_start + length
+                
+                if len(buffer) < data_end + 2:
+                    raise ValueError("Incomplete bulk string data")
+                
+                command_parts.append(buffer[current_pos:crlf2])
+                command_parts.append(buffer[data_start:data_end])
+                
+                current_pos = data_end + 2
+
+            commands.append(command_parts)
+            buffer = buffer[current_pos:]
+        
+        except (ValueError, IndexError):
+            break
+            
+    return commands, buffer
+
 def handle_client(client_socket, client_address, datastore, server_state):
     print(f"Connect from {client_address}")
     in_transaction = False
@@ -170,7 +219,7 @@ def connect_to_master(server_state, replica_port, datastore):
 
         fullresync_response = master_socket.recv(1024)
         print(f"Received FULLRESYNC from master: {fullresync_response}")
-
+        
         rdb_header = b""
         while not rdb_header.endswith(b"\r\n"):
             rdb_header += master_socket.recv(1)
@@ -178,12 +227,16 @@ def connect_to_master(server_state, replica_port, datastore):
         length = int(length_str)
         master_socket.recv(length)
 
+        buffer = b""
         while True:
-            propagated_command = master_socket.recv(1024)
-            if not propagated_command:
+            data = master_socket.recv(1024)
+            if not data:
                 break
-            parts = propagated_command.strip().split(b'\r\n')
-            handle_command(parts, datastore, server_state)
+            buffer += data
+            
+            commands, buffer = parse_commands_from_buffer(buffer)
+            for parts in commands:
+                handle_command(parts, datastore, server_state)
             
     except Exception as e:
         print(f"Error in master connection: {e}")
