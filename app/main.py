@@ -2,10 +2,9 @@ import socket
 import threading
 import argparse
 from .datastore import RedisDataStore
-from .command_handler import handle_command
+from .command_handler import handle_command, WRITE_COMMANDS
 from . import protocol
 
-#for EMPTY_RDB_HEX, you can set it to whatever you want
 EMPTY_RDB_HEX = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc226404000fa0c616f662d707265616d626c65c000fffe00f7e03ac95225"
 EMPTY_RDB_CONTENT = bytes.fromhex(EMPTY_RDB_HEX)
 
@@ -23,7 +22,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
             command_name = parts[2].decode().upper()
 
             if in_transaction and command_name not in ["EXEC", "DISCARD", "MULTI"]:
-                transaction_queue.append(parts)
+                transaction_queue.append((parts, request_bytes))
                 client_socket.sendall(protocol.format_simple_string("QUEUED"))
                 continue
 
@@ -36,8 +35,12 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     client_socket.sendall(protocol.format_error("EXEC without MULTI"))
                 else:
                     responses = []
-                    for queued_parts in transaction_queue:
+                    for queued_parts, original_bytes in transaction_queue:
                         responses.append(handle_command(queued_parts, datastore, server_state))
+                        if queued_parts[2].decode().upper() in WRITE_COMMANDS and server_state["role"] == "master":
+                            for replica_socket in server_state["replicas"]:
+                                replica_socket.sendall(original_bytes)
+                    
                     client_socket.sendall(protocol.format_array(responses))
                     in_transaction = False
                     transaction_queue = []
@@ -126,46 +129,43 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     if action == "SEND_RDB_FILE":
                         rdb_response = f"${len(EMPTY_RDB_CONTENT)}\r\n".encode() + EMPTY_RDB_CONTENT
                         client_socket.sendall(rdb_response)
+                        if server_state["role"] == "master":
+                            server_state["replicas"].append(client_socket)
                 else:
                     client_socket.sendall(response)
+                    if command_name in WRITE_COMMANDS and server_state["role"] == "master":
+                        for replica_socket in server_state["replicas"]:
+                            replica_socket.sendall(request_bytes)
 
         except (IndexError, ConnectionResetError, ValueError):
             break
     
     print(f"Closing connection from {client_address}")
+    if client_socket in server_state.get("replicas", []):
+        server_state["replicas"].remove(client_socket)
     client_socket.close()
 
 def connect_to_master(server_state, replica_port):
-    master_host = server_state["master_host"]
-    master_port = server_state["master_port"]
-    
+    master_host, master_port = server_state["master_host"], server_state["master_port"]
     try:
         master_socket = socket.create_connection((master_host, master_port))
         print(f"Connected to master at {master_host}:{master_port}")
-
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PING")]))
         master_socket.recv(1024)
-
         master_socket.sendall(protocol.format_array([
             protocol.format_bulk_string(b"REPLCONF"),
             protocol.format_bulk_string(b"listening-port"),
-            protocol.format_bulk_string(str(replica_port).encode())
-        ]))
+            protocol.format_bulk_string(str(replica_port).encode())]))
         master_socket.recv(1024)
-
         master_socket.sendall(protocol.format_array([
             protocol.format_bulk_string(b"REPLCONF"),
             protocol.format_bulk_string(b"capa"),
-            protocol.format_bulk_string(b"psync2")
-        ]))
+            protocol.format_bulk_string(b"psync2")]))
         master_socket.recv(1024)
-
         master_socket.sendall(protocol.format_array([
             protocol.format_bulk_string(b"PSYNC"),
             protocol.format_bulk_string(b"?"),
-            protocol.format_bulk_string(b"-1")
-        ]))
-
+            protocol.format_bulk_string(b"-1")]))
     except Exception as e:
         print(f"Error connecting to master: {e}")
 
@@ -181,6 +181,7 @@ def main():
     server_state = {
         "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
         "master_repl_offset": 0,
+        "replicas": [],
     }
     
     if args.replicaof:
