@@ -216,10 +216,10 @@ def connect_to_master(server_state, replica_port, datastore):
             protocol.format_bulk_string(b"PSYNC"),
             protocol.format_bulk_string(b"?"),
             protocol.format_bulk_string(b"-1")]))
-        
+
         fullresync_response = master_socket.recv(1024)
         print(f"Received FULLRESYNC from master: {fullresync_response}")
-        
+
         rdb_header = b""
         while not rdb_header.endswith(b"\r\n"):
             rdb_header += master_socket.recv(1)
@@ -236,7 +236,16 @@ def connect_to_master(server_state, replica_port, datastore):
             
             commands, buffer = parse_commands_from_buffer(buffer)
             for parts in commands:
-                handle_command(parts, datastore, server_state)
+                command_name = parts[2].decode().upper()
+                if command_name == "REPLCONF" and len(parts) > 5 and parts[4].decode().upper() == "GETACK":
+                    ack_response = protocol.format_array([
+                        protocol.format_bulk_string(b"REPLCONF"),
+                        protocol.format_bulk_string(b"ACK"),
+                        protocol.format_bulk_string(b"0")
+                    ])
+                    master_socket.sendall(ack_response)
+                else:
+                    handle_command(parts, datastore, server_state)
             
     except Exception as e:
         print(f"Error in master connection: {e}")
