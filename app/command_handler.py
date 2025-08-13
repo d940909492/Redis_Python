@@ -1,7 +1,6 @@
 import time
 from . import protocol
 
-
 def handle_ping(parts, datastore, server_state):
     return protocol.format_simple_string("PONG")
 
