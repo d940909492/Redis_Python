@@ -228,12 +228,15 @@ def handle_psync(parts, datastore, server_state):
     response_str = f"FULLRESYNC {replid} {offset}"
     return (protocol.format_simple_string(response_str), "SEND_RDB_FILE")
 
+def handle_wait(parts, datastore, server_state):
+    return protocol.format_integer(0)
+
 
 COMMAND_HANDLERS = {
     "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info,
     "REPLCONF": handle_replconf, "PSYNC": handle_psync,
     "SET": handle_set, "GET": handle_get, "INCR": handle_incr,
-    "TYPE": handle_type,
+    "TYPE": handle_type, "WAIT": handle_wait,
     "LPUSH": handle_lpush, "RPUSH": handle_rpush, "LPOP": handle_lpop,
     "LLEN": handle_llen, "LRANGE": handle_lrange,
     "XADD": handle_xadd, "XRANGE": handle_xrange, "XREAD": handle_xread,
