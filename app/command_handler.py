@@ -175,14 +175,13 @@ def handle_xrange(parts, datastore, server_state):
                     results.append(entry)
     return protocol.format_stream_range_response(results)
 
-def handle_xread(parts, datastore, server_state):
+def handle_xread(parts, datastore, server_state, is_blocking_call=False):
     block_timeout_ms = None
     keys = []
     start_ids_str = []
 
     try:
         streams_idx = [p.lower() for p in parts].index(b'streams')
-        
         options_parts = parts[:streams_idx]
         stream_parts = parts[streams_idx + 1:]
 
@@ -239,7 +238,7 @@ def handle_xread(parts, datastore, server_state):
         return all_results
 
     results = get_results_after_id_resolution()
-    if results or block_timeout_ms is None:
+    if results or not is_blocking_call or block_timeout_ms is None:
         return protocol.format_xread_response(results)
 
     key_to_wait_on = keys[0]
@@ -281,7 +280,6 @@ def handle_psync(parts, datastore, server_state):
 def handle_wait(parts, datastore, server_state):
     return None
 
-
 COMMAND_HANDLERS = {
     "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info,
     "REPLCONF": handle_replconf, "PSYNC": handle_psync,
@@ -300,7 +298,7 @@ def handle_command(parts, datastore, server_state):
     if not handler:
         return protocol.format_error(f"unknown command '{command_name}'")
 
-    if command_name in ["WAIT"]:
+    if command_name in ["WAIT", "XREAD"]:
         return None
     
     return handler(parts, datastore, server_state)

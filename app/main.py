@@ -3,7 +3,7 @@ import threading
 import argparse
 import time
 from .datastore import RedisDataStore
-from .command_handler import handle_command, WRITE_COMMANDS
+from .command_handler import handle_command, WRITE_COMMANDS, handle_xread
 from . import protocol
 
 EMPTY_RDB_HEX = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc226404000fa0c616f662d707265616d626c65c000fffe00f7e03ac95225"
@@ -59,6 +59,8 @@ def handle_client(client_socket, client_address, datastore, server_state):
             if not request_bytes: break
 
             parts = request_bytes.strip().split(b'\r\n')
+            if not parts or len(parts) < 3: continue
+            
             command_name = parts[2].decode().upper()
 
             if in_transaction and command_name not in ["EXEC", "DISCARD", "MULTI"]:
@@ -144,6 +146,11 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     time.sleep(0.01)
                 
                 client_socket.sendall(protocol.format_integer(acked_replicas))
+            
+            elif command_name == "XREAD":
+                response = handle_xread(parts, datastore, server_state, is_blocking_call=True)
+                client_socket.sendall(response)
+
             else:
                 response = handle_command(parts, datastore, server_state)
                 if response is None: continue 
