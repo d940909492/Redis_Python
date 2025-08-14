@@ -187,7 +187,8 @@ def handle_xread(parts, datastore, server_state, is_blocking_call=False):
 
         try:
             block_idx = [p.lower() for p in options_parts].index(b'block')
-            block_timeout_ms = int(options_parts[block_idx + 2].decode())
+            if is_blocking_call:
+                block_timeout_ms = int(options_parts[block_idx + 2].decode())
         except (ValueError, IndexError):
             pass
 

@@ -146,7 +146,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     time.sleep(0.01)
                 
                 client_socket.sendall(protocol.format_integer(acked_replicas))
-            
+
             elif command_name == "XREAD":
                 response = handle_xread(parts, datastore, server_state, is_blocking_call=True)
                 client_socket.sendall(response)
