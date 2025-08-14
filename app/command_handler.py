@@ -176,37 +176,79 @@ def handle_xrange(parts, datastore, server_state):
     return protocol.format_stream_range_response(results)
 
 def handle_xread(parts, datastore, server_state):
+    block_timeout_ms = None
     try:
-        streams_idx = parts.index(b'streams')
-        num_keys = (len(parts) - streams_idx - 1) // 4
-        keys_start, ids_start = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
-        keys = parts[keys_start:ids_start:2]
-        start_ids_str = [p.decode() for p in parts[ids_start::2]]
+        block_idx = [p.lower() for p in parts].index(b'block')
+        try:
+            block_timeout_ms = int(parts[block_idx + 2].decode())
+            parts = parts[:block_idx] + parts[block_idx + 4:]
+        except (IndexError, ValueError):
+            return protocol.format_error("syntax error for BLOCK")
+    except ValueError:
+        pass
+
+    try:
+        streams_idx = [p.lower() for p in parts].index(b'streams')
+        num_keys = (len(parts) - streams_idx - 1) // 2
+        keys = parts[streams_idx + 1 : streams_idx + 1 + num_keys]
+        start_ids_str = [p.decode() for p in parts[streams_idx + 1 + num_keys:]]
     except (ValueError, IndexError):
         return protocol.format_error("syntax error")
+
+    if not keys or len(keys) != len(start_ids_str):
+        return protocol.format_error("Unbalanced XREAD list of streams")
 
     def parse_id(id_str):
         if id_str == '$': return '$'
         return tuple(map(int, id_str.split('-')))
 
-    all_results = {}
-    with datastore.lock:
-        for i, key in enumerate(keys):
-            id_val = start_ids_str[i]
-            if id_val == '$':
+    def get_results():
+        all_results = {}
+        with datastore.lock:
+            for i, key in enumerate(keys):
+                id_val = start_ids_str[i]
+                start_id = None
+                if id_val == '$':
+                    item = datastore.get_item(key)
+                    if item and item[0] == 'stream' and item[1]:
+                        start_id = parse_id(item[1][-1][0].decode())
+                    else:
+                        start_id = (float('inf'), float('inf'))
+                else:
+                    start_id = parse_id(id_val)
+                
+                key_results = []
                 item = datastore.get_item(key)
-                start_id = parse_id(item[1][-1][0].decode()) if item and item[1] else (0, 0)
-            else:
-                start_id = parse_id(id_val)
-            key_results = []
-            item = datastore.get_item(key)
-            if item and item[0] == 'stream':
-                for entry in item[1]:
-                    if parse_id(entry[0].decode()) > start_id:
-                        key_results.append(entry)
-            if key_results:
-                all_results[key] = key_results
-    return protocol.format_xread_response(all_results)
+                if item and item[0] == 'stream':
+                    for entry in item[1]:
+                        entry_id = parse_id(entry[0].decode())
+                        if start_id == (float('inf'), float('inf')): continue
+                        if entry_id > start_id:
+                            key_results.append(entry)
+                
+                if key_results:
+                    all_results[key] = key_results
+        return all_results
+
+    results = get_results()
+    if results or block_timeout_ms is None:
+        return protocol.format_xread_response(results)
+
+    key_to_wait_on = keys[0]
+    with datastore.lock:
+        results = get_results()
+        if results:
+            return protocol.format_xread_response(results)
+        
+        condition = datastore.get_condition_for_key(key_to_wait_on)
+        timeout_s = None if block_timeout_ms == 0 else block_timeout_ms / 1000.0
+        condition.wait(timeout=timeout_s)
+
+    final_results = get_results()
+    if final_results:
+        return protocol.format_xread_response(final_results)
+    else:
+        return protocol.format_bulk_string(None)
 
 def handle_info(parts, datastore, server_state):
     section = parts[4].decode().lower()
@@ -249,4 +291,6 @@ def handle_command(parts, datastore, server_state):
     handler = COMMAND_HANDLERS.get(command_name)
     if not handler:
         return protocol.format_error(f"unknown command '{command_name}'")
+    if command_name == "WAIT":
+        return None
     return handler(parts, datastore, server_state)

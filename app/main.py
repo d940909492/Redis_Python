@@ -100,43 +100,46 @@ def handle_client(client_socket, client_address, datastore, server_state):
             elif command_name == "REPLCONF":
                 if len(parts) > 5 and parts[4].decode().upper() == "ACK":
                     ack_offset = int(parts[6].decode())
-                    server_state["replica_acks"][client_socket] = ack_offset
+                    with server_state["ack_condition"]:
+                        server_state["replica_acks"][client_socket] = ack_offset
+                        server_state["ack_condition"].notify_all()
                 else:
                     client_socket.sendall(handle_command(parts, datastore, server_state))
             elif command_name == "WAIT":
                 num_replicas_to_wait_for = int(parts[4].decode())
                 timeout_ms = int(parts[6].decode())
-                
-                if server_state["master_repl_offset"] == 0:
+                wait_offset = server_state["master_repl_offset"]
+
+                if wait_offset == 0 or num_replicas_to_wait_for == 0:
                     client_socket.sendall(protocol.format_integer(len(server_state["replicas"])))
                     continue
 
-                getack_command = protocol.format_array([
-                    protocol.format_bulk_string(b"REPLCONF"),
-                    protocol.format_bulk_string(b"GETACK"),
-                    protocol.format_bulk_string(b"*")
-                ])
-                for replica_socket in server_state["replicas"]:
-                    replica_socket.sendall(getack_command)
-                
-                start_time = time.time()
-                acked_replicas = 0
-                while True:
-                    with datastore.lock:
-                        current_acked = sum(1 for offset in server_state["replica_acks"].values() if offset >= server_state["master_repl_offset"])
-                    acked_replicas = current_acked
+                with server_state["ack_condition"]:
+                    acked_replicas = sum(1 for offset in server_state["replica_acks"].values() if offset >= wait_offset)
                     
                     if acked_replicas >= num_replicas_to_wait_for:
-                        break
+                        client_socket.sendall(protocol.format_integer(acked_replicas))
+                        continue
                     
-                    if (time.time() - start_time) * 1000 > timeout_ms:
-                        break
+                    timeout_s = timeout_ms / 1000.0 if timeout_ms > 0 else None
+                    end_time = (time.time() + timeout_s) if timeout_s is not None else float('inf')
                     
-                    time.sleep(0.01)
-                
-                client_socket.sendall(protocol.format_integer(acked_replicas))
+                    while True:
+                        acked_replicas = sum(1 for offset in server_state["replica_acks"].values() if offset >= wait_offset)
+                        if acked_replicas >= num_replicas_to_wait_for:
+                            break
+                        
+                        remaining_time = end_time - time.time()
+                        if remaining_time <= 0:
+                            break
+                        
+                        server_state["ack_condition"].wait(timeout=remaining_time)
+
+                    client_socket.sendall(protocol.format_integer(acked_replicas))
             else:
                 response = handle_command(parts, datastore, server_state)
+                if response is None: continue
+
                 if isinstance(response, tuple):
                     response_bytes, action = response
                     client_socket.sendall(response_bytes)
@@ -146,7 +149,8 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         if server_state["role"] == "master":
                             is_replica = True
                             server_state["replicas"].append(client_socket)
-                            server_state["replica_acks"][client_socket] = 0
+                            with server_state["ack_condition"]:
+                                server_state["replica_acks"][client_socket] = 0
                 else:
                     client_socket.sendall(response)
                     if command_name in WRITE_COMMANDS and server_state["role"] == "master":
@@ -159,9 +163,10 @@ def handle_client(client_socket, client_address, datastore, server_state):
     
     print(f"Closing connection from {client_address}")
     if is_replica:
-        server_state["replicas"].remove(client_socket)
-        if client_socket in server_state["replica_acks"]:
-            del server_state["replica_acks"][client_socket]
+        with server_state["ack_condition"]:
+            server_state["replicas"].remove(client_socket)
+            if client_socket in server_state["replica_acks"]:
+                del server_state["replica_acks"][client_socket]
     client_socket.close()
 
 def connect_to_master(server_state, replica_port, datastore):
@@ -234,6 +239,7 @@ def main():
         "master_repl_offset": 0,
         "replicas": [],
         "replica_acks": {},
+        "ack_condition": threading.Condition(),
     }
     
     if args.replicaof:
