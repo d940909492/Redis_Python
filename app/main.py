@@ -106,7 +106,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
             elif command_name == "WAIT":
                 num_replicas_to_wait_for = int(parts[4].decode())
                 timeout_ms = int(parts[6].decode())
-
+                
                 if server_state["master_repl_offset"] == 0:
                     client_socket.sendall(protocol.format_integer(len(server_state["replicas"])))
                     continue
@@ -120,12 +120,11 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     replica_socket.sendall(getack_command)
                 
                 start_time = time.time()
+                acked_replicas = 0
                 while True:
-                    acked_replicas = 0
                     with datastore.lock:
-                        for replica_socket in server_state["replicas"]:
-                            if server_state["replica_acks"].get(replica_socket, -1) >= server_state["master_repl_offset"]:
-                                acked_replicas += 1
+                        current_acked = sum(1 for offset in server_state["replica_acks"].values() if offset >= server_state["master_repl_offset"])
+                    acked_replicas = current_acked
                     
                     if acked_replicas >= num_replicas_to_wait_for:
                         break
@@ -170,7 +169,6 @@ def connect_to_master(server_state, replica_port, datastore):
     try:
         master_socket = socket.create_connection((master_host, master_port))
         print(f"Connected to master at {master_host}:{master_port}")
-
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PING")]))
         master_socket.recv(1024)
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"listening-port"), protocol.format_bulk_string(str(replica_port).encode())]))
@@ -204,7 +202,11 @@ def connect_to_master(server_state, replica_port, datastore):
                 command_name = parts[2].decode().upper()
                 
                 if command_name == "REPLCONF" and len(parts) > 5 and parts[4].decode().upper() == "GETACK":
-                    ack_response = protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"ACK"), protocol.format_bulk_string(str(bytes_processed).encode())])
+                    ack_response = protocol.format_array([
+                        protocol.format_bulk_string(b"REPLCONF"),
+                        protocol.format_bulk_string(b"ACK"),
+                        protocol.format_bulk_string(str(bytes_processed).encode())
+                    ])
                     master_socket.sendall(ack_response)
                 else:
                     handle_command(parts, datastore, server_state)

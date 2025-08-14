@@ -231,6 +231,7 @@ def handle_psync(parts, datastore, server_state):
 def handle_wait(parts, datastore, server_state):
     return protocol.format_integer(len(server_state.get("replicas", [])))
 
+
 COMMAND_HANDLERS = {
     "PING": handle_ping, "ECHO": handle_echo, "INFO": handle_info,
     "REPLCONF": handle_replconf, "PSYNC": handle_psync,
