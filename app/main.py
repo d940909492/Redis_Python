@@ -53,8 +53,8 @@ def handle_client(client_socket, client_address, datastore, server_state):
     transaction_queue = []
     is_replica = False
 
-    while True:
-        try:
+    try:
+        while True:
             request_bytes = client_socket.recv(1024)
             if not request_bytes: break
 
@@ -84,8 +84,9 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     if server_state["role"] == "master":
                         for original_bytes in bytes_to_propagate:
                             server_state["master_repl_offset"] += len(original_bytes)
-                            for replica_socket in server_state["replicas"]:
-                                replica_socket.sendall(original_bytes)
+                            with server_state["ack_condition"]:
+                                for replica_socket in server_state["replicas"]:
+                                    replica_socket.sendall(original_bytes)
 
                     client_socket.sendall(protocol.format_array(responses))
                     in_transaction = False
@@ -102,7 +103,6 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     ack_offset = int(parts[6].decode())
                     with server_state["ack_condition"]:
                         server_state["replica_acks"][client_socket] = ack_offset
-                        server_state["ack_condition"].notify_all()
                 else:
                     client_socket.sendall(handle_command(parts, datastore, server_state))
             elif command_name == "WAIT":
@@ -110,35 +110,43 @@ def handle_client(client_socket, client_address, datastore, server_state):
                 timeout_ms = int(parts[6].decode())
                 wait_offset = server_state["master_repl_offset"]
 
-                if wait_offset == 0 or num_replicas_to_wait_for == 0:
-                    client_socket.sendall(protocol.format_integer(len(server_state["replicas"])))
+                with server_state["ack_condition"]:
+                    acked_replicas = sum(1 for offset in server_state["replica_acks"].values() if offset >= wait_offset)
+
+                if acked_replicas >= num_replicas_to_wait_for:
+                    client_socket.sendall(protocol.format_integer(acked_replicas))
                     continue
 
                 with server_state["ack_condition"]:
-                    acked_replicas = sum(1 for offset in server_state["replica_acks"].values() if offset >= wait_offset)
+                    if server_state["replicas"]:
+                        getack_command = protocol.format_array([
+                            protocol.format_bulk_string(b"REPLCONF"),
+                            protocol.format_bulk_string(b"GETACK"),
+                            protocol.format_bulk_string(b"*")
+                        ])
+                        for replica_socket in server_state["replicas"]:
+                            try:
+                                replica_socket.sendall(getack_command)
+                            except OSError: pass
+
+                start_time = time.time()
+                while True:
+                    with server_state["ack_condition"]:
+                        acked_replicas = sum(1 for offset in server_state["replica_acks"].values() if offset >= wait_offset)
                     
                     if acked_replicas >= num_replicas_to_wait_for:
-                        client_socket.sendall(protocol.format_integer(acked_replicas))
-                        continue
+                        break
                     
-                    timeout_s = timeout_ms / 1000.0 if timeout_ms > 0 else None
-                    end_time = (time.time() + timeout_s) if timeout_s is not None else float('inf')
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    if timeout_ms > 0 and elapsed_ms >= timeout_ms:
+                        break
                     
-                    while True:
-                        acked_replicas = sum(1 for offset in server_state["replica_acks"].values() if offset >= wait_offset)
-                        if acked_replicas >= num_replicas_to_wait_for:
-                            break
-                        
-                        remaining_time = end_time - time.time()
-                        if remaining_time <= 0:
-                            break
-                        
-                        server_state["ack_condition"].wait(timeout=remaining_time)
-
-                    client_socket.sendall(protocol.format_integer(acked_replicas))
+                    time.sleep(0.01)
+                
+                client_socket.sendall(protocol.format_integer(acked_replicas))
             else:
                 response = handle_command(parts, datastore, server_state)
-                if response is None: continue
+                if response is None: continue 
 
                 if isinstance(response, tuple):
                     response_bytes, action = response
@@ -148,26 +156,28 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         client_socket.sendall(rdb_response)
                         if server_state["role"] == "master":
                             is_replica = True
-                            server_state["replicas"].append(client_socket)
                             with server_state["ack_condition"]:
+                                server_state["replicas"].append(client_socket)
                                 server_state["replica_acks"][client_socket] = 0
                 else:
                     client_socket.sendall(response)
                     if command_name in WRITE_COMMANDS and server_state["role"] == "master":
                         server_state["master_repl_offset"] += len(request_bytes)
-                        for replica_socket in server_state["replicas"]:
-                            replica_socket.sendall(request_bytes)
+                        with server_state["ack_condition"]:
+                            for replica_socket in server_state["replicas"]:
+                                replica_socket.sendall(request_bytes)
 
-        except (IndexError, ConnectionResetError, ValueError):
-            break
-    
-    print(f"Closing connection from {client_address}")
-    if is_replica:
-        with server_state["ack_condition"]:
-            server_state["replicas"].remove(client_socket)
-            if client_socket in server_state["replica_acks"]:
-                del server_state["replica_acks"][client_socket]
-    client_socket.close()
+    except (IndexError, ConnectionResetError, ValueError, OSError):
+        pass
+    finally:
+        print(f"Closing connection from {client_address}")
+        if is_replica:
+            with server_state["ack_condition"]:
+                if client_socket in server_state["replicas"]:
+                    server_state["replicas"].remove(client_socket)
+                if client_socket in server_state["replica_acks"]:
+                    del server_state["replica_acks"][client_socket]
+        client_socket.close()
 
 def connect_to_master(server_state, replica_port, datastore):
     master_host, master_port = server_state["master_host"], server_state["master_port"]
@@ -183,21 +193,20 @@ def connect_to_master(server_state, replica_port, datastore):
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PSYNC"), protocol.format_bulk_string(b"?"), protocol.format_bulk_string(b"-1")]))
         
         buffer = b""
+
         while True:
-            data = master_socket.recv(1024)
+            if b'$' in buffer:
+                rdb_start = buffer.find(b'$') + 1
+                rdb_end_of_length = buffer.find(b'\r\n', rdb_start)
+                if rdb_end_of_length != -1:
+                    rdb_length = int(buffer[rdb_start:rdb_end_of_length])
+                    rdb_data_start = rdb_end_of_length + 2
+                    if len(buffer) >= rdb_data_start + rdb_length:
+                        buffer = buffer[rdb_data_start + rdb_length:]
+                        break
+            data = master_socket.recv(4096)
             if not data: break
             buffer += data
-            if b'$' in buffer and b'\r\n' in buffer: break
-        
-        rdb_start = buffer.find(b'$') + 1
-        rdb_end_of_length = buffer.find(b'\r\n', rdb_start)
-        rdb_length = int(buffer[rdb_start:rdb_end_of_length])
-        rdb_data_start = rdb_end_of_length + 2
-        
-        while len(buffer) < rdb_data_start + rdb_length:
-            buffer += master_socket.recv(1024)
-        
-        buffer = buffer[rdb_data_start + rdb_length:]
         
         bytes_processed = 0
         while True:
@@ -218,7 +227,7 @@ def connect_to_master(server_state, replica_port, datastore):
                 
                 bytes_processed += len(command_bytes)
 
-            more_data = master_socket.recv(1024)
+            more_data = master_socket.recv(4096)
             if not more_data: break
             buffer += more_data
             
