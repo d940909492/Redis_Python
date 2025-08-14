@@ -177,66 +177,74 @@ def handle_xrange(parts, datastore, server_state):
 
 def handle_xread(parts, datastore, server_state):
     block_timeout_ms = None
-    try:
-        block_idx = [p.lower() for p in parts].index(b'block')
-        try:
-            block_timeout_ms = int(parts[block_idx + 2].decode())
-            parts = parts[:block_idx] + parts[block_idx + 4:]
-        except (IndexError, ValueError):
-            return protocol.format_error("syntax error for BLOCK")
-    except ValueError:
-        pass
+    keys = []
+    start_ids_str = []
 
     try:
         streams_idx = [p.lower() for p in parts].index(b'streams')
-        num_keys = (len(parts) - streams_idx - 1) // 2
-        keys = parts[streams_idx + 1 : streams_idx + 1 + num_keys]
-        start_ids_str = [p.decode() for p in parts[streams_idx + 1 + num_keys:]]
-    except (ValueError, IndexError):
-        return protocol.format_error("syntax error")
+        
+        options_parts = parts[:streams_idx]
+        stream_parts = parts[streams_idx + 1:]
 
-    if not keys or len(keys) != len(start_ids_str):
-        return protocol.format_error("Unbalanced XREAD list of streams")
+        try:
+            block_idx = [p.lower() for p in options_parts].index(b'block')
+            block_timeout_ms = int(options_parts[block_idx + 2].decode())
+        except (ValueError, IndexError):
+            pass
+
+        if len(stream_parts) % 2 != 0:
+            return protocol.format_error("ERR Unbalanced XREAD list of streams")
+        
+        num_keys = len(stream_parts) // 2
+        keys = stream_parts[:num_keys]
+        start_ids_str = [p.decode() for p in stream_parts[num_keys:]]
+
+    except ValueError:
+        return protocol.format_error("ERR syntax error")
+
+    if not keys:
+        return protocol.format_error("ERR 'streams' argument is missing or empty")
 
     def parse_id(id_str):
         if id_str == '$': return '$'
         return tuple(map(int, id_str.split('-')))
 
-    def get_results():
+    resolved_start_ids = []
+    with datastore.lock:
+        for i, key in enumerate(keys):
+            id_val = start_ids_str[i]
+            if id_val == '$':
+                item = datastore.get_item(key)
+                if item and item[0] == 'stream' and item[1]:
+                    resolved_start_ids.append(parse_id(item[1][-1][0].decode()))
+                else:
+                    resolved_start_ids.append((0, 0))
+            else:
+                resolved_start_ids.append(parse_id(id_val))
+    
+    def get_results_after_id_resolution():
         all_results = {}
         with datastore.lock:
             for i, key in enumerate(keys):
-                id_val = start_ids_str[i]
-                start_id = None
-                if id_val == '$':
-                    item = datastore.get_item(key)
-                    if item and item[0] == 'stream' and item[1]:
-                        start_id = parse_id(item[1][-1][0].decode())
-                    else:
-                        start_id = (float('inf'), float('inf'))
-                else:
-                    start_id = parse_id(id_val)
-                
+                start_id = resolved_start_ids[i]
                 key_results = []
                 item = datastore.get_item(key)
                 if item and item[0] == 'stream':
                     for entry in item[1]:
                         entry_id = parse_id(entry[0].decode())
-                        if start_id == (float('inf'), float('inf')): continue
                         if entry_id > start_id:
                             key_results.append(entry)
-                
                 if key_results:
                     all_results[key] = key_results
         return all_results
 
-    results = get_results()
+    results = get_results_after_id_resolution()
     if results or block_timeout_ms is None:
         return protocol.format_xread_response(results)
 
     key_to_wait_on = keys[0]
     with datastore.lock:
-        results = get_results()
+        results = get_results_after_id_resolution()
         if results:
             return protocol.format_xread_response(results)
         
@@ -244,7 +252,7 @@ def handle_xread(parts, datastore, server_state):
         timeout_s = None if block_timeout_ms == 0 else block_timeout_ms / 1000.0
         condition.wait(timeout=timeout_s)
 
-    final_results = get_results()
+    final_results = get_results_after_id_resolution()
     if final_results:
         return protocol.format_xread_response(final_results)
     else:
@@ -271,7 +279,7 @@ def handle_psync(parts, datastore, server_state):
     return (protocol.format_simple_string(response_str), "SEND_RDB_FILE")
 
 def handle_wait(parts, datastore, server_state):
-    return protocol.format_integer(len(server_state.get("replicas", [])))
+    return None
 
 
 COMMAND_HANDLERS = {
@@ -291,6 +299,8 @@ def handle_command(parts, datastore, server_state):
     handler = COMMAND_HANDLERS.get(command_name)
     if not handler:
         return protocol.format_error(f"unknown command '{command_name}'")
-    if command_name == "WAIT":
+
+    if command_name in ["WAIT"]:
         return None
+    
     return handler(parts, datastore, server_state)
