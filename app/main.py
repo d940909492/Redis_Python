@@ -1,6 +1,7 @@
 import socket
 import threading
 import argparse
+import time
 from .datastore import RedisDataStore
 from .command_handler import handle_command, WRITE_COMMANDS
 from . import protocol
@@ -50,6 +51,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
     print(f"Connect from {client_address}")
     in_transaction = False
     transaction_queue = []
+    is_replica = False
 
     while True:
         try:
@@ -73,13 +75,18 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     client_socket.sendall(protocol.format_error("EXEC without MULTI"))
                 else:
                     responses = []
+                    bytes_to_propagate = []
                     for queued_parts, original_bytes in transaction_queue:
                         responses.append(handle_command(queued_parts, datastore, server_state))
-                        if queued_parts[2].decode().upper() in WRITE_COMMANDS and server_state["role"] == "master":
+                        if queued_parts[2].decode().upper() in WRITE_COMMANDS:
+                            bytes_to_propagate.append(original_bytes)
+                    
+                    if server_state["role"] == "master":
+                        for original_bytes in bytes_to_propagate:
+                            server_state["master_repl_offset"] += len(original_bytes)
                             for replica_socket in server_state["replicas"]:
                                 replica_socket.sendall(original_bytes)
-                            server_state["master_repl_offset"] += len(original_bytes)
-                    
+
                     client_socket.sendall(protocol.format_array(responses))
                     in_transaction = False
                     transaction_queue = []
@@ -90,76 +97,45 @@ def handle_client(client_socket, client_address, datastore, server_state):
                     in_transaction = False
                     transaction_queue = []
                     client_socket.sendall(protocol.format_simple_string("OK"))
-            elif command_name == "BLPOP":
-                key = parts[4]
-                timeout = float(parts[6].decode())
-                response = b""
-                with datastore.lock:
-                    item = datastore.get_item(key)
-                    if item and item[0] == 'list' and item[1]:
-                        popped = item[1].pop(0)
-                        response = protocol.format_array([protocol.format_bulk_string(key), protocol.format_bulk_string(popped)])
-                    else:
-                        condition = datastore.get_condition_for_key(key)
-                        was_notified = condition.wait(timeout=None if timeout == 0 else timeout)
-                        if was_notified:
-                            item = datastore.get_item(key)
-                            if item and item[0] == 'list' and item[1]:
-                                popped = item[1].pop(0)
-                                response = protocol.format_array([protocol.format_bulk_string(key), protocol.format_bulk_string(popped)])
-                            else: response = protocol.format_bulk_string(None)
-                        else: response = protocol.format_bulk_string(None)
-                client_socket.sendall(response)
-            elif command_name == "XREAD" and b'block' in [p.lower() for p in parts]:
-                response = handle_command(parts, datastore, server_state)
-                if response == protocol.format_bulk_string(None):
-                    try:
-                        block_idx = parts.index(b'block')
-                        timeout_ms = int(parts[block_idx + 2].decode())
-                        streams_idx = parts.index(b'streams')
-                        num_keys = (len(parts) - streams_idx - 1) // 4
-                        keys_start_idx, ids_start_idx = streams_idx + 2, streams_idx + 2 + (num_keys * 2)
-                        keys = parts[keys_start_idx:ids_start_idx:2]
-                        start_ids_str = [p.decode() for p in parts[ids_start_idx::2]]
-                    except (ValueError, IndexError):
-                        client_socket.sendall(protocol.format_error("syntax error"))
-                        continue
-
-                    def parse_id(id_str):
-                        if id_str == '$': return '$'
-                        return tuple(map(int, id_str.split('-')))
-
-                    resolved_start_ids = {}
-                    with datastore.lock:
-                        for i, key in enumerate(keys):
-                            id_val = start_ids_str[i]
-                            if id_val == '$':
-                                item = datastore.get_item(key)
-                                resolved_start_ids[key] = parse_id(item[1][-1][0].decode()) if item and item[1] else (0,0)
-                            else:
-                                resolved_start_ids[key] = parse_id(id_val)
-                    
-                    condition = datastore.get_condition_for_key(keys[0])
-                    with datastore.lock:
-                        was_notified = condition.wait(timeout=timeout_ms / 1000.0 if timeout_ms > 0 else None)
-                    
-                    all_results = {}
-                    if was_notified:
-                        with datastore.lock:
-                            for key in keys:
-                                start_id = resolved_start_ids[key]
-                                key_results = []
-                                item = datastore.get_item(key)
-                                if item and item[0] == 'stream':
-                                    for entry in item[1]:
-                                        if parse_id(entry[0].decode()) > start_id:
-                                            key_results.append(entry)
-                                if key_results:
-                                    all_results[key] = key_results
-                    
-                    client_socket.sendall(protocol.format_xread_response(all_results))
+            elif command_name == "REPLCONF":
+                if len(parts) > 5 and parts[4].decode().upper() == "ACK":
+                    ack_offset = int(parts[6].decode())
+                    server_state["replica_acks"][client_socket] = ack_offset
                 else:
-                    client_socket.sendall(response)
+                    client_socket.sendall(handle_command(parts, datastore, server_state))
+            elif command_name == "WAIT":
+                num_replicas_to_wait_for = int(parts[4].decode())
+                timeout_ms = int(parts[6].decode())
+
+                if server_state["master_repl_offset"] == 0:
+                    client_socket.sendall(protocol.format_integer(len(server_state["replicas"])))
+                    continue
+
+                getack_command = protocol.format_array([
+                    protocol.format_bulk_string(b"REPLCONF"),
+                    protocol.format_bulk_string(b"GETACK"),
+                    protocol.format_bulk_string(b"*")
+                ])
+                for replica_socket in server_state["replicas"]:
+                    replica_socket.sendall(getack_command)
+                
+                start_time = time.time()
+                while True:
+                    acked_replicas = 0
+                    with datastore.lock:
+                        for replica_socket in server_state["replicas"]:
+                            if server_state["replica_acks"].get(replica_socket, -1) >= server_state["master_repl_offset"]:
+                                acked_replicas += 1
+                    
+                    if acked_replicas >= num_replicas_to_wait_for:
+                        break
+                    
+                    if (time.time() - start_time) * 1000 > timeout_ms:
+                        break
+                    
+                    time.sleep(0.01)
+                
+                client_socket.sendall(protocol.format_integer(acked_replicas))
             else:
                 response = handle_command(parts, datastore, server_state)
                 if isinstance(response, tuple):
@@ -169,20 +145,24 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         rdb_response = f"${len(EMPTY_RDB_CONTENT)}\r\n".encode() + EMPTY_RDB_CONTENT
                         client_socket.sendall(rdb_response)
                         if server_state["role"] == "master":
+                            is_replica = True
                             server_state["replicas"].append(client_socket)
+                            server_state["replica_acks"][client_socket] = 0
                 else:
                     client_socket.sendall(response)
                     if command_name in WRITE_COMMANDS and server_state["role"] == "master":
+                        server_state["master_repl_offset"] += len(request_bytes)
                         for replica_socket in server_state["replicas"]:
                             replica_socket.sendall(request_bytes)
-                        server_state["master_repl_offset"] += len(request_bytes)
 
         except (IndexError, ConnectionResetError, ValueError):
             break
     
     print(f"Closing connection from {client_address}")
-    if client_socket in server_state.get("replicas", []):
+    if is_replica:
         server_state["replicas"].remove(client_socket)
+        if client_socket in server_state["replica_acks"]:
+            del server_state["replica_acks"][client_socket]
     client_socket.close()
 
 def connect_to_master(server_state, replica_port, datastore):
@@ -193,29 +173,18 @@ def connect_to_master(server_state, replica_port, datastore):
 
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PING")]))
         master_socket.recv(1024)
-        master_socket.sendall(protocol.format_array([
-            protocol.format_bulk_string(b"REPLCONF"),
-            protocol.format_bulk_string(b"listening-port"),
-            protocol.format_bulk_string(str(replica_port).encode())]))
+        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"listening-port"), protocol.format_bulk_string(str(replica_port).encode())]))
         master_socket.recv(1024)
-        master_socket.sendall(protocol.format_array([
-            protocol.format_bulk_string(b"REPLCONF"),
-            protocol.format_bulk_string(b"capa"),
-            protocol.format_bulk_string(b"psync2")]))
+        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"capa"), protocol.format_bulk_string(b"psync2")]))
         master_socket.recv(1024)
-        master_socket.sendall(protocol.format_array([
-            protocol.format_bulk_string(b"PSYNC"),
-            protocol.format_bulk_string(b"?"),
-            protocol.format_bulk_string(b"-1")]))
-
+        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PSYNC"), protocol.format_bulk_string(b"?"), protocol.format_bulk_string(b"-1")]))
+        
         buffer = b""
         while True:
             data = master_socket.recv(1024)
-            if not data:
-                break
+            if not data: break
             buffer += data
-            if b'$' in buffer and b'\r\n' in buffer:
-                break
+            if b'$' in buffer and b'\r\n' in buffer: break
         
         rdb_start = buffer.find(b'$') + 1
         rdb_end_of_length = buffer.find(b'\r\n', rdb_start)
@@ -226,7 +195,7 @@ def connect_to_master(server_state, replica_port, datastore):
             buffer += master_socket.recv(1024)
         
         buffer = buffer[rdb_data_start + rdb_length:]
-
+        
         bytes_processed = 0
         while True:
             commands, buffer = parse_commands_from_buffer(buffer)
@@ -235,11 +204,7 @@ def connect_to_master(server_state, replica_port, datastore):
                 command_name = parts[2].decode().upper()
                 
                 if command_name == "REPLCONF" and len(parts) > 5 and parts[4].decode().upper() == "GETACK":
-                    ack_response = protocol.format_array([
-                        protocol.format_bulk_string(b"REPLCONF"),
-                        protocol.format_bulk_string(b"ACK"),
-                        protocol.format_bulk_string(str(bytes_processed).encode())
-                    ])
+                    ack_response = protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"ACK"), protocol.format_bulk_string(str(bytes_processed).encode())])
                     master_socket.sendall(ack_response)
                 else:
                     handle_command(parts, datastore, server_state)
@@ -247,8 +212,7 @@ def connect_to_master(server_state, replica_port, datastore):
                 bytes_processed += len(command_bytes)
 
             more_data = master_socket.recv(1024)
-            if not more_data:
-                break
+            if not more_data: break
             buffer += more_data
             
     except Exception as e:
@@ -267,6 +231,7 @@ def main():
         "master_replid": "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
         "master_repl_offset": 0,
         "replicas": [],
+        "replica_acks": {},
     }
     
     if args.replicaof:
