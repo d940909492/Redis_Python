@@ -229,7 +229,8 @@ def handle_psync(parts, datastore, server_state):
     return (protocol.format_simple_string(response_str), "SEND_RDB_FILE")
 
 def handle_wait(parts, datastore, server_state):
-    return protocol.format_integer(0)
+    num_replicas = len(server_state.get("replicas", []))
+    return protocol.format_integer(num_replicas)
 
 
 COMMAND_HANDLERS = {
