@@ -169,13 +169,23 @@ def connect_to_master(server_state, replica_port, datastore):
     try:
         master_socket = socket.create_connection((master_host, master_port))
         print(f"Connected to master at {master_host}:{master_port}")
+
         master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PING")]))
         master_socket.recv(1024)
-        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"listening-port"), protocol.format_bulk_string(str(replica_port).encode())]))
+        master_socket.sendall(protocol.format_array([
+            protocol.format_bulk_string(b"REPLCONF"),
+            protocol.format_bulk_string(b"listening-port"),
+            protocol.format_bulk_string(str(replica_port).encode())]))
         master_socket.recv(1024)
-        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"REPLCONF"), protocol.format_bulk_string(b"capa"), protocol.format_bulk_string(b"psync2")]))
+        master_socket.sendall(protocol.format_array([
+            protocol.format_bulk_string(b"REPLCONF"),
+            protocol.format_bulk_string(b"capa"),
+            protocol.format_bulk_string(b"psync2")]))
         master_socket.recv(1024)
-        master_socket.sendall(protocol.format_array([protocol.format_bulk_string(b"PSYNC"), protocol.format_bulk_string(b"?"), protocol.format_bulk_string(b"-1")]))
+        master_socket.sendall(protocol.format_array([
+            protocol.format_bulk_string(b"PSYNC"),
+            protocol.format_bulk_string(b"?"),
+            protocol.format_bulk_string(b"-1")]))
         
         buffer = b""
         while True:
