@@ -11,7 +11,7 @@ EMPTY_RDB_CONTENT = bytes.fromhex(EMPTY_RDB_HEX)
 def parse_commands_from_buffer(buffer):
     """
     Parses multiple commands from a stream buffer.
-    Returns a list of commands (as raw byte strings) and the remaining, unprocessed buffer.
+    Returns a list of raw command byte strings and the remaining, unprocessed buffer.
     """
     commands = []
     current_pos = 0
@@ -78,6 +78,7 @@ def handle_client(client_socket, client_address, datastore, server_state):
                         if queued_parts[2].decode().upper() in WRITE_COMMANDS and server_state["role"] == "master":
                             for replica_socket in server_state["replicas"]:
                                 replica_socket.sendall(original_bytes)
+                            server_state["master_repl_offset"] += len(original_bytes)
                     
                     client_socket.sendall(protocol.format_array(responses))
                     in_transaction = False
@@ -215,16 +216,15 @@ def connect_to_master(server_state, replica_port, datastore):
             buffer += data
             if b'$' in buffer and b'\r\n' in buffer:
                 break
-
+        
         rdb_start = buffer.find(b'$') + 1
         rdb_end_of_length = buffer.find(b'\r\n', rdb_start)
         rdb_length = int(buffer[rdb_start:rdb_end_of_length])
-
         rdb_data_start = rdb_end_of_length + 2
-
+        
         while len(buffer) < rdb_data_start + rdb_length:
             buffer += master_socket.recv(1024)
-
+        
         buffer = buffer[rdb_data_start + rdb_length:]
 
         bytes_processed = 0
@@ -233,7 +233,7 @@ def connect_to_master(server_state, replica_port, datastore):
             for command_bytes in commands:
                 parts = command_bytes.strip().split(b'\r\n')
                 command_name = parts[2].decode().upper()
-
+                
                 if command_name == "REPLCONF" and len(parts) > 5 and parts[4].decode().upper() == "GETACK":
                     ack_response = protocol.format_array([
                         protocol.format_bulk_string(b"REPLCONF"),
